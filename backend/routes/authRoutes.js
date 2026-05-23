@@ -13,7 +13,7 @@ router.post('/login', login);
 
 // GET /auth/github -> Redirects user to GitHub for Authentication
 router.get('/github', (req, res, next) => {
-  const callbackUrl = `${(process.env.BACKEND_URL || 'http://localhost:5000').replace(/\/$/, "")}/auth/github/callback`;
+  const callbackUrl = `${(process.env.BACKEND_URL || 'https://task-reporter-ai.onrender.com').replace(/\/$/, "")}/auth/github/callback`;
   console.log("\n🚀 STARTING GITHUB LOGIN");
   console.log("====================================");
   console.log("Callback URL (redirect_uri):", callbackUrl);

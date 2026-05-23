@@ -21,7 +21,7 @@ passport.deserializeUser(async (id, done) => {
 
 export const initPassport = () => {
   console.log("BACKEND_URL:", process.env.BACKEND_URL);
-  const callbackUrl = `${(process.env.BACKEND_URL || 'http://localhost:5000').replace(/\/$/, "")}/auth/github/callback`;
+  const callbackUrl = `${(process.env.BACKEND_URL || 'https://task-reporter-ai.onrender.com').replace(/\/$/, "")}/auth/github/callback`;
   console.log("Generated GitHub Callback URL:", callbackUrl);
   console.log("FINAL redirect_uri:", callbackUrl);
 
