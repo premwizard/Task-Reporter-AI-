@@ -10,11 +10,11 @@ export const AuthProvider = ({ children }) => {
   // Fetch the current authenticated user on boot
   const verifySession = async () => {
     try {
-      // Cookies are automatically included in Axios calls
       const userData = await api.get('/auth/me');
       setUser(userData);
     } catch (err) {
       console.log('[AuthContext] Session verification failed (not logged in)');
+      localStorage.removeItem('token');
       setUser(null);
     } finally {
       setLoading(false);
@@ -32,6 +32,7 @@ export const AuthProvider = ({ children }) => {
     } catch (err) {
       console.error('[AuthContext] Logout API error:', err);
     } finally {
+      localStorage.removeItem('token');
       setUser(null);
       setLoading(false);
       // Redirect to login page

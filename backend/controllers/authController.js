@@ -62,7 +62,7 @@ export const register = async (req, res) => {
     });
 
     console.log(`[Register Success] User "${user.email}" registered locally. Role: ${user.role}`);
-    return res.status(201).json(user);
+    return res.status(201).json({ ...user, token });
   } catch (err) {
     console.error('[Register Error] Error during local registration:', err);
     return res.status(500).json({ error: 'Internal server error during registration' });
@@ -130,7 +130,7 @@ export const login = async (req, res) => {
     
     // Remove password_hash from response
     delete user.password_hash;
-    return res.status(200).json(user);
+    return res.status(200).json({ ...user, token });
   } catch (err) {
     console.error('[Login Error] Error during local login:', err);
     return res.status(500).json({ error: 'Internal server error during login' });
@@ -173,11 +173,13 @@ export const handleGithubCallback = (req, res) => {
 
     console.log(`[OAuth success] User "${user.github_username}" logged in. Role: ${user.role}`);
 
-    // Redirect to frontend
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/`);
+    // Redirect to frontend with token parameter
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, "");
+    res.redirect(`${frontendUrl}/oauth-success?token=${token}`);
   } catch (err) {
     console.error('[OAuth Callback] Error handling login redirect:', err);
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/login?error=server_error`);
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, "");
+    res.redirect(`${frontendUrl}/login?error=server_error`);
   }
 };
 

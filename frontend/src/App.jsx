@@ -16,10 +16,13 @@ import ConnectRepos from './pages/ConnectRepos';
 import WhatsAppSetup from './pages/WhatsAppSetup';
 import AIReports from './pages/AIReports';
 import WebhookMonitor from './pages/WebhookMonitor';
+import OAuthSuccess from './pages/OAuthSuccess';
 import api from './services/api';
 import toast, { Toaster } from 'react-hot-toast';
 
-const SOCKET_URL = 'http://localhost:5000';
+const SOCKET_URL = import.meta.env.VITE_API_URL 
+  ? import.meta.env.VITE_API_URL.replace('/api', '') 
+  : 'https://task-reporter-ai.onrender.com';
 
 // ── Shared UI Components ─────────────────────────────────────────────
 
@@ -830,6 +833,8 @@ function AppRouting({ currentPath, navigate }) {
   const { user, loading } = useAuth();
 
   useEffect(() => {
+    if (currentPath.startsWith('/oauth-success')) return;
+
     // If session is checked and user is not authenticated, force redirect to /login
     if (!loading && !user && currentPath !== '/login' && currentPath !== '/register') {
       navigate('/login');
@@ -839,6 +844,10 @@ function AppRouting({ currentPath, navigate }) {
       navigate('/');
     }
   }, [user, loading, currentPath]);
+
+  if (currentPath.startsWith('/oauth-success')) {
+    return <OAuthSuccess navigate={navigate} />;
+  }
 
   if (loading) {
     return (

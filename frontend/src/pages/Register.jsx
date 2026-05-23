@@ -24,13 +24,16 @@ const Register = ({ navigate }) => {
     const toastId = toast.loading('Creating account...');
 
     try {
-      await api.post('/auth/register', {
+      const res = await api.post('/auth/register', {
         first_name: firstName,
         last_name: lastName,
         email,
         password,
         role
       });
+      if (res && res.token) {
+        localStorage.setItem('token', res.token);
+      }
       toast.dismiss(toastId);
       toast.success('Account registered successfully!');
       

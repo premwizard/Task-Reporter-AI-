@@ -64,7 +64,7 @@ const WebhookMonitor = () => {
     // Hook up real-time websocket feed
     const SOCKET_URL = import.meta.env.VITE_API_URL 
       ? import.meta.env.VITE_API_URL.replace('/api', '') 
-      : 'http://localhost:5000';
+      : 'https://task-reporter-ai.onrender.com';
     
     addLog(`🔌 WebSocket: Connecting to live feed at ${SOCKET_URL}...`, 'info');
     const socket = io(SOCKET_URL);

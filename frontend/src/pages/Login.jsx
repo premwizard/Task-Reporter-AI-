@@ -48,7 +48,10 @@ const Login = ({ navigate }) => {
     const toastId = toast.loading('Signing in...');
 
     try {
-      await api.post('/auth/login', { email, password });
+      const res = await api.post('/auth/login', { email, password });
+      if (res && res.token) {
+        localStorage.setItem('token', res.token);
+      }
       toast.dismiss(toastId);
       toast.success('Signed in successfully!');
       
