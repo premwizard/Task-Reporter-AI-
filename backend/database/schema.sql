@@ -65,3 +65,16 @@ CREATE TABLE IF NOT EXISTS repositories (
     webhook_id VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 6. Create AI Reports Table
+CREATE TABLE IF NOT EXISTS ai_reports (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    report_type VARCHAR(50) NOT NULL,
+    employee_name VARCHAR(255),
+    repository_name VARCHAR(255),
+    summary TEXT NOT NULL,
+    start_date VARCHAR(255),
+    end_date VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
