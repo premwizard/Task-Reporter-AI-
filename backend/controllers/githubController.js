@@ -99,14 +99,14 @@ export const connectRepositories = async (req, res) => {
     }
     
     // Webhook destination target url
-    const backendUrl = (process.env.BACKEND_URL || 'http://localhost:5000').trim();
+    const backendUrl = (process.env.BACKEND_URL || 'https://task-reporter-ai.onrender.com').trim().replace(/\/$/, "");
     // STEP 2 — VERIFY WEBHOOK URL
     const webhookUrl = `${backendUrl}/api/webhooks/github`;
     console.log(`🌐 Configured BACKEND_URL: "${process.env.BACKEND_URL}"`);
     console.log(`🌐 Generated Webhook URL: "${webhookUrl}"`);
 
     // STEP 7 — VERIFY PUBLIC URL
-    if (webhookUrl.includes('localhost') || webhookUrl.includes('127.0.0.1')) {
+    if (process.env.NODE_ENV !== 'production' && (webhookUrl.includes('localhost') || webhookUrl.includes('127.0.0.1'))) {
       const errorMsg = `❌ Webhook Creation Blocked: BACKEND_URL in .env is configured to localhost "${backendUrl}". GitHub cannot resolve local loopbacks. Please start a secure public tunnel (e.g. Cloudflare, ngrok, localtunnel) and set BACKEND_URL in your .env file to your tunnel URL.`;
       console.error('\n' + '='.repeat(80));
       console.error(errorMsg);
@@ -199,6 +199,12 @@ export const connectRepositories = async (req, res) => {
         console.log('='.repeat(60));
         console.log(JSON.stringify(payload, null, 2));
         console.log('='.repeat(60));
+
+        console.log("====================================");
+        console.log("🚀 Creating GitHub Webhook");
+        console.log("Webhook URL:", webhookUrl);
+        console.log("Repository:", repoFullName);
+        console.log("====================================");
 
         // Create new webhook
         console.log(`🚀 Sending webhook creation API call to GitHub...`);
@@ -313,14 +319,14 @@ export const reconnectWebhook = async (req, res) => {
       console.error(`❌ Failed to verify token scopes:`, authErr.message);
     }
 
-    const backendUrl = (process.env.BACKEND_URL || 'http://localhost:5000').trim();
+    const backendUrl = (process.env.BACKEND_URL || 'https://task-reporter-ai.onrender.com').trim().replace(/\/$/, "");
     // STEP 2 — VERIFY WEBHOOK URL
     const webhookUrl = `${backendUrl}/api/webhooks/github`;
     console.log(`🌐 Configured BACKEND_URL: "${process.env.BACKEND_URL}"`);
     console.log(`🌐 Generated Webhook URL: "${webhookUrl}"`);
 
     // STEP 7 — VERIFY PUBLIC URL
-    if (webhookUrl.includes('localhost') || webhookUrl.includes('127.0.0.1')) {
+    if (process.env.NODE_ENV !== 'production' && (webhookUrl.includes('localhost') || webhookUrl.includes('127.0.0.1'))) {
       const errorMsg = `❌ Webhook Update Blocked: BACKEND_URL is currently localhost "${backendUrl}". Webhook cannot be updated until a public tunnel is active and specified in backend/.env.`;
       console.error('\n' + '='.repeat(80));
       console.error(errorMsg);
@@ -383,6 +389,12 @@ export const reconnectWebhook = async (req, res) => {
     console.log('='.repeat(60));
     console.log(JSON.stringify(payload, null, 2));
     console.log('='.repeat(60));
+
+    console.log("====================================");
+    console.log("🚀 Creating GitHub Webhook");
+    console.log("Webhook URL:", webhookUrl);
+    console.log("Repository:", repository_name);
+    console.log("====================================");
 
     // Create fresh webhook
     console.log(`🚀 Sending webhook creation API call to GitHub...`);
@@ -513,7 +525,7 @@ export async function repairRepositoryWebhook(userId, repoFullName, octokit) {
   console.log(`\n🔧 [Webhook Repair] Started for: "${repoFullName}"`);
   const [owner, repo] = repoFullName.split('/');
   
-  const backendUrl = (process.env.BACKEND_URL || 'http://localhost:5000').trim();
+  const backendUrl = (process.env.BACKEND_URL || 'https://task-reporter-ai.onrender.com').trim().replace(/\/$/, "");
   const webhookUrl = `${backendUrl}/api/webhooks/github`;
   
   console.log(`🔧 [Webhook Repair] Current backend endpoint: "${webhookUrl}"`);
@@ -585,6 +597,12 @@ export async function repairRepositoryWebhook(userId, repoFullName, octokit) {
     console.log('='.repeat(60));
     console.log(JSON.stringify(payload, null, 2));
     console.log('='.repeat(60));
+
+    console.log("====================================");
+    console.log("🚀 Creating GitHub Webhook");
+    console.log("Webhook URL:", webhookUrl);
+    console.log("Repository:", repoFullName);
+    console.log("====================================");
 
     const response = await octokit.repos.createHook(payload);
     const newHook = response.data;
