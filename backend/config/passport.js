@@ -20,12 +20,17 @@ passport.deserializeUser(async (id, done) => {
 });
 
 export const initPassport = () => {
+  console.log("BACKEND_URL:", process.env.BACKEND_URL);
+  const callbackUrl = `${(process.env.BACKEND_URL || 'http://localhost:5000').replace(/\/$/, "")}/auth/github/callback`;
+  console.log("Generated GitHub Callback URL:", callbackUrl);
+  console.log("FINAL redirect_uri:", callbackUrl);
+
   passport.use(
     new GitHubStrategy(
       {
         clientID: process.env.GITHUB_CLIENT_ID || 'dummy_id',
         clientSecret: process.env.GITHUB_CLIENT_SECRET || 'dummy_secret',
-        callbackURL: process.env.GITHUB_CALLBACK_URL || 'http://localhost:5000/auth/github/callback',
+        callbackURL: callbackUrl,
         scope: ['user:email', 'admin:repo_hook', 'repo'],
       },
       async (accessToken, refreshToken, profile, done) => {
