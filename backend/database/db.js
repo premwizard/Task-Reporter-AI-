@@ -5,6 +5,10 @@ dotenv.config();
 
 const { Pool } = pg;
 
+console.log("[DB Init] Initializing database pool...");
+console.log("[DB Init] DATABASE_URL present:", !!process.env.DATABASE_URL);
+console.log("[DB Init] DB_HOST present:", !!process.env.DB_HOST);
+
 export const pool = new Pool(
   process.env.DATABASE_URL
     ? {
