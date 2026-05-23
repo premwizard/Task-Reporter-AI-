@@ -21,6 +21,7 @@ import taskRoutes from './routes/taskRoutes.js';
 import { initPassport } from './config/passport.js';
 import { initSocketIO } from './socket.js';
 import { initCronJobs } from './cron/reportScheduler.js';
+import { initDatabase } from './database/db.js';
 
 dotenv.config();
 
@@ -105,10 +106,22 @@ app.get('/', (req, res) => {
 });
 
 // Start Server
-httpServer.listen(PORT, () => {
-    console.log('====================================');
-    console.log(`🚀 GitIntel Backend Running on port ${PORT}`);
-    console.log(`📡 FRONTEND_URL is set to: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
-    console.log('====================================');
-    initCronJobs();
-});
+const startServer = async () => {
+    try {
+        console.log("⏳ Initializing database schema...");
+        await initDatabase();
+        
+        httpServer.listen(PORT, () => {
+            console.log('====================================');
+            console.log(`🚀 GitIntel Backend Running on port ${PORT}`);
+            console.log(`📡 FRONTEND_URL is set to: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
+            console.log('====================================');
+            initCronJobs();
+        });
+    } catch (err) {
+        console.error("❌ Failed to initialize database schema. Server startup aborted.", err);
+        process.exit(1);
+    }
+};
+
+startServer();

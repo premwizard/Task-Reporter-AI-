@@ -1,5 +1,8 @@
 import pg from 'pg';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 dotenv.config();
 
@@ -58,3 +61,66 @@ pool.query('SELECT NOW()')
   .catch((err) => {
     console.error("❌ PostgreSQL Query Health Check Failure:", err);
   });
+
+// Get directory name in ES Module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+/**
+ * Automatically read schema.sql and create tables if they do not exist.
+ */
+export const initDatabase = async () => {
+  console.log("[DB Init] Starting automatic schema setup...");
+  try {
+    const schemaPath = path.join(__dirname, 'schema.sql');
+    if (!fs.existsSync(schemaPath)) {
+      throw new Error(`schema.sql not found at path: ${schemaPath}`);
+    }
+
+    const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+    
+    // Execute all queries in schema.sql
+    await pool.query(schemaSql);
+    console.log("[DB Init] Schema creation queries executed successfully.");
+
+    // Verify tables exist
+    const checkTablesQuery = `
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = 'public' 
+      AND table_name IN ('users', 'activities', 'repositories', 'connected_repositories', 'tasks');
+    `;
+    const res = await pool.query(checkTablesQuery);
+    const existingTables = res.rows.map(row => row.table_name);
+    console.log("[DB Init] Table verification check results:", existingTables);
+
+    // Print logs as requested by Step 8
+    if (existingTables.includes('users')) {
+      console.log("✅ users table ready");
+    } else {
+      console.warn("⚠️ users table is missing!");
+    }
+
+    if (existingTables.includes('activities')) {
+      console.log("✅ activities table ready");
+    } else {
+      console.warn("⚠️ activities table is missing!");
+    }
+
+    if (existingTables.includes('repositories') || existingTables.includes('connected_repositories')) {
+      console.log("✅ repositories table ready");
+    } else {
+      console.warn("⚠️ repositories table is missing!");
+    }
+
+    if (existingTables.includes('tasks')) {
+      console.log("✅ tasks table ready");
+    }
+    
+    console.log("🚀 Database initialization complete and verified!");
+  } catch (err) {
+    console.error("❌ Database Initialization Failure:", err);
+    throw err;
+  }
+};
+
