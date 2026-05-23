@@ -7,7 +7,7 @@
   "scripts": {
     "kill-port": "powershell -Command \"$p=(netstat -ano | findstr :5000 | findstr LISTENING | ForEach-Object { $_.Split(' ')[-1] } | Select-Object -First 1); if ($p) { taskkill /PID $p /F }\"",
     "start": "node server.js",
-    "dev": "nodemon server.js",
+    "dev": "nodemon server.js || node server.js",
     "init-db": "node scripts/init-db.js",
     "seed": "node seed.js"
   },
