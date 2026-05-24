@@ -5,7 +5,8 @@ import {
   reconnectWebhook, 
   disconnectRepository, 
   getConnectedRepos,
-  repairAllWebhooks
+  repairAllWebhooks,
+  autoConnectAllRepos
 } from '../controllers/githubController.js';
 import { authenticateToken } from '../middleware/auth.js';
 
@@ -18,5 +19,8 @@ router.post('/reconnect', authenticateToken, reconnectWebhook);
 router.post('/disconnect', authenticateToken, disconnectRepository);
 router.get('/connected', authenticateToken, getConnectedRepos);
 router.post('/repair-all', authenticateToken, repairAllWebhooks);
+
+// POST /api/github/auto-connect-all -> Sync all repos & auto-create webhooks (triggered from UI)
+router.post('/auto-connect-all', authenticateToken, autoConnectAllRepos);
 
 export default router;

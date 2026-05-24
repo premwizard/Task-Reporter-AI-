@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { pool } from '../database/db.js';
+import { Octokit } from '@octokit/rest';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super_secret_jwt_token_key_12345';
 
@@ -138,6 +139,162 @@ export const login = async (req, res) => {
 };
 
 /**
+ * AUTO-CONNECT: Automatically fetches all user repos and creates webhooks.
+ * Runs in background after OAuth login — never blocks the redirect.
+ */
+async function autoConnectAllReposAfterLogin(user) {
+  console.log('\n' + '='.repeat(60));
+  console.log('🤖 [Auto-Connect] Starting post-login webhook setup');
+  console.log(`👤 User: ${user.github_username} (ID: ${user.id})`);
+  console.log('='.repeat(60));
+
+  try {
+    // Fetch latest access token from DB
+    const userRes = await pool.query(
+      'SELECT github_access_token FROM users WHERE id = $1',
+      [user.id]
+    );
+    const token = userRes.rows[0]?.github_access_token;
+
+    console.log(`🔑 [Auto-Connect] GitHub Access Token: ${token ? 'EXISTS (' + token.length + ' chars)' : 'MISSING ❌'}`);
+    if (!token) {
+      console.error('[Auto-Connect] ❌ No access token found — cannot create webhooks.');
+      return;
+    }
+
+    const octokit = new Octokit({ auth: token });
+
+    // Verify scopes
+    try {
+      const authRes = await octokit.users.getAuthenticated();
+      const scopes = authRes.headers['x-oauth-scopes'] || '';
+      console.log(`🔐 [Auto-Connect] OAuth Scopes: "${scopes}"`);
+      if (!scopes.includes('admin:repo_hook')) {
+        console.warn(`🚨 [Auto-Connect] WARNING: "admin:repo_hook" scope missing — webhook creation will fail!`);
+        console.warn(`   → User must log out and log in again to grant admin:repo_hook scope.`);
+        return;
+      }
+    } catch (scopeErr) {
+      console.error('[Auto-Connect] ❌ Failed to verify scopes:', scopeErr.message);
+    }
+
+    // Build webhook URL from env
+    const backendUrl = (process.env.BACKEND_URL || 'https://task-reporter-ai.onrender.com').trim().replace(/\/$/, '');
+    const webhookUrl = `${backendUrl}/api/webhooks/github`;
+    console.log(`🌐 [Auto-Connect] Webhook URL: "${webhookUrl}"`);
+
+    if (webhookUrl.includes('localhost') || webhookUrl.includes('127.0.0.1')) {
+      console.error('[Auto-Connect] ❌ BACKEND_URL is localhost — GitHub cannot reach local servers. Skipping auto-connect.');
+      return;
+    }
+
+    // Fetch all repos for the user
+    const { data: repos } = await octokit.repos.listForAuthenticatedUser({
+      per_page: 100,
+      sort: 'updated',
+    });
+    console.log(`📦 [Auto-Connect] Found ${repos.length} repositories to process.`);
+
+    let connected = 0;
+    let skipped = 0;
+    let failed = 0;
+
+    for (const repo of repos) {
+      const owner = repo.owner.login;
+      const repoName = repo.name;
+      const repoFullName = repo.full_name;
+
+      // Only process repos where the user has admin access (required for webhook creation)
+      if (!repo.permissions?.admin) {
+        console.log(`   ⏭️  [Auto-Connect] Skipping ${repoFullName} — no admin permission.`);
+        skipped++;
+        continue;
+      }
+
+      try {
+        console.log(`\n====================================`);
+        console.log(`🚀 Creating Webhook`);
+        console.log(`Repository: ${repoFullName}`);
+        console.log(`Webhook URL: ${webhookUrl}`);
+        console.log(`====================================`);
+
+        // Check existing hooks to prevent duplicates
+        const { data: existingHooks } = await octokit.repos.listWebhooks({ owner, repo: repoName, per_page: 100 });
+
+        // Clean up outdated/stale hooks (localhost, old tunnel URLs)
+        const staleHooks = existingHooks.filter(
+          h => (h.config?.url?.includes('/webhook/github') || h.config?.url?.includes('/webhooks/github'))
+            && h.config?.url !== webhookUrl
+        );
+        for (const staleHook of staleHooks) {
+          console.log(`   🧹 [Auto-Connect] Removing stale hook ID ${staleHook.id}: "${staleHook.config?.url}"`);
+          await octokit.repos.deleteHook({ owner, repo: repoName, hook_id: staleHook.id }).catch(() => {});
+        }
+
+        // Check if a valid hook already exists
+        const existingValidHook = existingHooks.find(h => h.config?.url === webhookUrl);
+        if (existingValidHook) {
+          console.log(`   ✅ [Auto-Connect] Webhook already active for ${repoFullName} (ID: ${existingValidHook.id})`);
+          await saveConnectedRepoAuth(user.id, repoFullName, existingValidHook.id, 'active');
+          skipped++;
+          continue;
+        }
+
+        // Create new webhook
+        const response = await octokit.repos.createHook({
+          owner,
+          repo: repoName,
+          name: 'web',
+          active: true,
+          events: ['push'],
+          config: {
+            url: webhookUrl,
+            content_type: 'json',
+            insecure_ssl: '0',
+          },
+        });
+
+        const hook = response.data;
+        console.log(`   ✅ Webhook Created Successfully`);
+        console.log(`   Webhook ID     : ${hook.id}`);
+        console.log(`   Webhook URL    : ${hook.config?.url}`);
+        console.log(`   Active         : ${hook.active}`);
+        console.log(`   Events         : ${JSON.stringify(hook.events)}`);
+
+        await saveConnectedRepoAuth(user.id, repoFullName, hook.id, 'active');
+        connected++;
+      } catch (hookErr) {
+        console.error(`   ❌ Webhook Creation Failed for ${repoFullName}:`, hookErr.response?.data || hookErr.message);
+        failed++;
+      }
+    }
+
+    console.log('\n' + '='.repeat(60));
+    console.log(`✅ [Auto-Connect] Complete: ${connected} created, ${skipped} skipped, ${failed} failed.`);
+    console.log('='.repeat(60) + '\n');
+  } catch (err) {
+    console.error('[Auto-Connect] ❌ Critical failure in auto-connect pipeline:', err.message);
+  }
+}
+
+/**
+ * DB helper for auth controller (isolated to avoid circular imports)
+ */
+async function saveConnectedRepoAuth(userId, repoFullName, webhookId, status) {
+  try {
+    await pool.query(
+      `INSERT INTO connected_repositories (user_id, repository_name, webhook_id, status)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id, repository_name)
+       DO UPDATE SET webhook_id = $3, status = $4, updated_at = CURRENT_TIMESTAMP`,
+      [userId, repoFullName, webhookId, status]
+    );
+  } catch (dbErr) {
+    console.error(`[Auto-Connect] ❌ DB save failed for ${repoFullName}:`, dbErr.message);
+  }
+}
+
+/**
  * Handle successful GitHub authentication callback
  * Signs JWT token, sets HTTP-only cookie, and redirects user to frontend dashboard
  */
@@ -172,6 +329,10 @@ export const handleGithubCallback = (req, res) => {
     });
 
     console.log(`[OAuth success] User "${user.github_username}" logged in. Role: ${user.role}`);
+
+    // 🚀 AUTO-CONNECT: Fire webhook creation for ALL repos in background (non-blocking)
+    // This is what makes the system fully automatic — no manual setup required.
+    setImmediate(() => autoConnectAllReposAfterLogin(user));
 
     // Redirect to frontend with token parameter
     const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, "");

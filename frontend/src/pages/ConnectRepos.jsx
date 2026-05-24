@@ -3,7 +3,8 @@ import api from '../services/api';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   FolderGit2, Search, Check, AlertTriangle, Link2, 
-  Trash2, RefreshCw, Eye, ShieldAlert, CheckCircle2, ChevronRight
+  Trash2, RefreshCw, Eye, ShieldAlert, CheckCircle2, ChevronRight,
+  Zap, Activity, Shield
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -14,6 +15,8 @@ const ConnectRepos = () => {
   const [selectedRepos, setSelectedRepos] = useState([]);
   const [connecting, setConnecting] = useState(false);
   const [actionInProgress, setActionInProgress] = useState(null);
+  const [syncingAll, setSyncingAll] = useState(false);
+  const [webhookStatus, setWebhookStatus] = useState(null);
 
   // Load repositories on mount
   const fetchRepos = async (quiet = false) => {
@@ -28,8 +31,18 @@ const ConnectRepos = () => {
     }
   };
 
+  const fetchWebhookStatus = async () => {
+    try {
+      const data = await api.get('/webhooks/status');
+      setWebhookStatus(data);
+    } catch (err) {
+      // Silently ignore — not critical
+    }
+  };
+
   useEffect(() => {
     fetchRepos();
+    fetchWebhookStatus();
   }, []);
 
   const filteredRepos = repos.filter(repo => 
@@ -115,6 +128,26 @@ const ConnectRepos = () => {
     }
   };
 
+  const handleSyncAllRepos = async () => {
+    setSyncingAll(true);
+    const toastId = toast.loading('🤖 Auto-connecting all repositories...');
+    try {
+      const data = await api.post('/github/auto-connect-all');
+      const { summary } = data;
+      toast.success(
+        `✅ Sync complete: ${summary.created} new, ${summary.connected} already active, ${summary.skipped} skipped, ${summary.failed} failed.`,
+        { id: toastId, duration: 8000 }
+      );
+      await fetchRepos(true);
+      await fetchWebhookStatus();
+    } catch (err) {
+      const errMsg = err.response?.data?.details || err.response?.data?.error || err.message;
+      toast.error('Sync failed: ' + errMsg, { id: toastId, duration: 6000 });
+    } finally {
+      setSyncingAll(false);
+    }
+  };
+
   const handleReconnect = async (repoFullName) => {
     setActionInProgress(repoFullName);
     const toastId = toast.loading(`Reconnecting webhook for ${repoFullName}...`);
@@ -157,6 +190,27 @@ const ConnectRepos = () => {
   return (
     <div className="max-w-7xl mx-auto space-y-6 font-sans">
       
+      {/* Webhook Status Banner */}
+      {webhookStatus && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className={`flex items-center gap-3 px-4 py-3 rounded-xl border text-sm font-medium ${
+            webhookStatus.status === 'healthy'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-500/10 dark:border-emerald-500/20 dark:text-emerald-400'
+              : 'bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-500/10 dark:border-amber-500/20 dark:text-amber-400'
+          }`}
+        >
+          <Shield className="w-4 h-4 flex-shrink-0" />
+          <span>
+            {webhookStatus.status === 'healthy' ? '✅' : '⚠️'} Webhook endpoint: <strong>{webhookStatus.webhook_url}</strong>
+          </span>
+          <span className="ml-auto text-xs opacity-70">
+            {webhookStatus.active_webhooks} active · {webhookStatus.recent_activities_24h} events (24h)
+          </span>
+        </motion.div>
+      )}
+
       {/* Header section */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
@@ -166,13 +220,23 @@ const ConnectRepos = () => {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {/* Sync All Repos — triggers auto-connect pipeline */}
+          <button
+            onClick={handleSyncAllRepos}
+            disabled={syncingAll || loading}
+            className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-sm font-semibold transition-all flex items-center gap-2 shadow-lg shadow-violet-600/20 disabled:opacity-50"
+          >
+            {syncingAll ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+            {syncingAll ? 'Syncing...' : 'Sync All Repos'}
+          </button>
+
           <button
             onClick={handleTestAutoWebhook}
             disabled={loading}
             className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-sm font-semibold transition-all flex items-center gap-2 shadow-lg shadow-amber-600/20"
           >
             <ShieldAlert className="w-4.5 h-4.5" />
-            Test Auto Webhook
+            Test Webhook
           </button>
 
           <button 

@@ -682,3 +682,143 @@ export const repairAllWebhooks = async (req, res) => {
   }
 };
 
+/**
+ * Auto-connect ALL user repositories (triggered from UI button / manual sync)
+ * POST /api/github/auto-connect-all
+ */
+export const autoConnectAllRepos = async (req, res) => {
+  console.log('\n====================================');
+  console.log('🤖 AUTO-CONNECT ALL REPOS TRIGGERED');
+  console.log('====================================');
+
+  try {
+    const userRes = await pool.query('SELECT github_access_token FROM users WHERE id = $1', [req.user.id]);
+    const token = userRes.rows[0]?.github_access_token;
+
+    if (!token) {
+      return res.status(401).json({ error: 'GitHub access token not found. Please log in with GitHub again.' });
+    }
+
+    console.log(`🔑 [Auto-Connect] GitHub Access Token: EXISTS (${token.length} chars)`);
+
+    const octokit = new Octokit({ auth: token });
+
+    // Verify scopes
+    let scopes = '';
+    try {
+      const authRes = await octokit.users.getAuthenticated();
+      scopes = authRes.headers['x-oauth-scopes'] || '';
+      console.log(`🔐 [Auto-Connect] OAuth Scopes: "${scopes}"`);
+      if (!scopes.includes('admin:repo_hook')) {
+        return res.status(403).json({
+          error: 'Missing required OAuth scope: admin:repo_hook',
+          details: 'Please log out and log back in with GitHub to grant webhook permissions.',
+          scopes
+        });
+      }
+    } catch (scopeErr) {
+      console.warn('[Auto-Connect] Could not verify scopes:', scopeErr.message);
+    }
+
+    const backendUrl = (process.env.BACKEND_URL || 'https://task-reporter-ai.onrender.com').trim().replace(/\/$/, '');
+    const webhookUrl = `${backendUrl}/api/webhooks/github`;
+    console.log(`🌐 [Auto-Connect] Webhook URL: "${webhookUrl}"`);
+
+    if (webhookUrl.includes('localhost') || webhookUrl.includes('127.0.0.1')) {
+      return res.status(400).json({
+        error: 'BACKEND_URL is configured to localhost. GitHub cannot deliver webhooks to local servers.',
+        isLocalhost: true
+      });
+    }
+
+    // Fetch all repos
+    const { data: repos } = await octokit.repos.listForAuthenticatedUser({
+      per_page: 100,
+      sort: 'updated',
+    });
+
+    console.log(`📦 [Auto-Connect] Found ${repos.length} repositories to process.`);
+
+    const results = [];
+
+    for (const repo of repos) {
+      const owner = repo.owner.login;
+      const repoName = repo.name;
+      const repoFullName = repo.full_name;
+
+      if (!repo.permissions?.admin) {
+        results.push({ repo: repoFullName, status: 'skipped', reason: 'no admin permission' });
+        continue;
+      }
+
+      try {
+        console.log(`\n====================================`);
+        console.log(`🚀 Creating Webhook`);
+        console.log(`Repository: ${repoFullName}`);
+        console.log(`Webhook URL: ${webhookUrl}`);
+        console.log(`====================================`);
+
+        const { data: existingHooks } = await octokit.repos.listWebhooks({ owner, repo: repoName, per_page: 100 });
+
+        // Remove stale/outdated hooks
+        const staleHooks = existingHooks.filter(
+          h => (h.config?.url?.includes('/webhook/github') || h.config?.url?.includes('/webhooks/github'))
+            && h.config?.url !== webhookUrl
+        );
+        for (const stale of staleHooks) {
+          console.log(`   🧹 Removing stale hook ID ${stale.id}: "${stale.config?.url}"`);
+          await octokit.repos.deleteHook({ owner, repo: repoName, hook_id: stale.id }).catch(() => {});
+        }
+
+        // Check for existing valid hook
+        const validHook = existingHooks.find(h => h.config?.url === webhookUrl);
+        if (validHook) {
+          console.log(`   ✅ Webhook already active for ${repoFullName} (ID: ${validHook.id})`);
+          await saveConnectedRepo(req.user.id, repoFullName, validHook.id, 'active');
+          results.push({ repo: repoFullName, status: 'connected', webhookId: validHook.id, message: 'Webhook already active.' });
+          continue;
+        }
+
+        // Create fresh webhook
+        const response = await octokit.repos.createHook({
+          owner,
+          repo: repoName,
+          name: 'web',
+          active: true,
+          events: ['push'],
+          config: {
+            url: webhookUrl,
+            content_type: 'json',
+            insecure_ssl: '0',
+          },
+        });
+
+        const hook = response.data;
+        console.log(`   ✅ Webhook Created Successfully`);
+        console.log(`   Webhook ID: ${hook.id} | URL: ${hook.config?.url} | Active: ${hook.active}`);
+
+        await saveConnectedRepo(req.user.id, repoFullName, hook.id, 'active');
+        results.push({ repo: repoFullName, status: 'created', webhookId: hook.id, message: 'Webhook created successfully.' });
+      } catch (err) {
+        console.error(`   ❌ Webhook Creation Failed for ${repoFullName}:`, err.response?.data || err.message);
+        results.push({ repo: repoFullName, status: 'failed', error: err.response?.data?.message || err.message });
+      }
+    }
+
+    const created = results.filter(r => r.status === 'created').length;
+    const connected = results.filter(r => r.status === 'connected').length;
+    const skipped = results.filter(r => r.status === 'skipped').length;
+    const failed = results.filter(r => r.status === 'failed').length;
+
+    console.log(`\n✅ [Auto-Connect] Complete: ${created} created, ${connected} already active, ${skipped} skipped, ${failed} failed.`);
+
+    res.status(200).json({
+      success: true,
+      summary: { created, connected, skipped, failed, total: repos.length },
+      results
+    });
+  } catch (err) {
+    console.error('❌ [Auto-Connect] Critical failure:', err.message);
+    res.status(500).json({ error: `Auto-connect failed: ${err.message}` });
+  }
+};

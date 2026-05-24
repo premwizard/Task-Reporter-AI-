@@ -1,5 +1,7 @@
 import express from 'express';
 import { handleGithubWebhook } from '../controllers/githubWebhookController.js';
+import { pool } from '../database/db.js';
+import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -24,10 +26,10 @@ router.use('/github', (req, res, next) => {
   next();
 });
 
-// POST /webhook/github -> GitHub Webhook event receiver
+// POST /api/webhooks/github -> GitHub Webhook event receiver
 router.post('/github', handleGithubWebhook);
 
-// STEP 10 — GET /webhook/test -> Diagnostic endpoint
+// GET /api/webhooks/test -> Diagnostic endpoint
 router.get('/test', (req, res) => {
   const backendUrl = (process.env.BACKEND_URL || 'http://localhost:5000').trim();
   const isLocalhost = backendUrl.includes('localhost') || backendUrl.includes('127.0.0.1');
@@ -39,6 +41,51 @@ router.get('/test', (req, res) => {
     is_localhost: isLocalhost,
     timestamp: new Date().toISOString()
   });
+});
+
+// GET /api/webhooks/status -> Webhook health check (Step 13)
+router.get('/status', authenticateToken, async (req, res) => {
+  try {
+    const backendUrl = (process.env.BACKEND_URL || 'http://localhost:5000').trim().replace(/\/$/, '');
+    const webhookUrl = `${backendUrl}/api/webhooks/github`;
+    const isLocalhost = webhookUrl.includes('localhost') || webhookUrl.includes('127.0.0.1');
+
+    // Count connected repositories for this user
+    const connectedRes = await pool.query(
+      `SELECT COUNT(*) as total,
+              COUNT(CASE WHEN status = 'active' THEN 1 END) as active_count
+       FROM connected_repositories WHERE user_id = $1`,
+      [req.user.id]
+    );
+
+    const stats = connectedRes.rows[0];
+
+    // Count recent activities in last 24h
+    const activityRes = await pool.query(
+      `SELECT COUNT(*) as recent FROM activities
+       WHERE user_id = $1 AND created_at >= NOW() - INTERVAL '24 hours'`,
+      [req.user.id]
+    );
+
+    res.status(200).json({
+      success: true,
+      webhook_url: webhookUrl,
+      webhook_reachable: !isLocalhost,
+      is_production_url: !isLocalhost,
+      connected_repos: parseInt(stats.total),
+      active_webhooks: parseInt(stats.active_count),
+      recent_activities_24h: parseInt(activityRes.rows[0].recent),
+      backend_url: backendUrl,
+      timestamp: new Date().toISOString(),
+      status: isLocalhost ? 'warning' : 'healthy',
+      message: isLocalhost
+        ? 'BACKEND_URL is set to localhost. GitHub cannot deliver webhooks to local servers.'
+        : 'Webhook endpoint is configured and reachable from GitHub.'
+    });
+  } catch (err) {
+    console.error('[Webhook Status] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 export default router;
