@@ -358,7 +358,22 @@ const ConnectRepos = () => {
                         </div>
 
                         {/* Connection Checkbox / Active Badge */}
-                        {!isConnected ? (
+                        {repo.connection_status === 'active' && (
+                          <span className="flex items-center gap-1 text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-200 dark:border-emerald-500/20 shadow-sm shadow-emerald-500/5">
+                            <CheckCircle2 className="w-3 h-3 stroke-[2.5]" /> Webhook Connected
+                          </span>
+                        )}
+                        {repo.connection_status === 'warning' && (
+                          <span className="flex items-center gap-1 text-[11px] font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-500/10 px-2.5 py-1 rounded-full border border-amber-200 dark:border-amber-500/20 shadow-sm">
+                            <AlertTriangle className="w-3 h-3 stroke-[2.5]" /> Permission Missing
+                          </span>
+                        )}
+                        {repo.connection_status === 'failed' && (
+                          <span className="flex items-center gap-1 text-[11px] font-bold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-500/10 px-2.5 py-1 rounded-full border border-rose-200 dark:border-rose-500/20 shadow-sm">
+                            <AlertTriangle className="w-3 h-3 stroke-[2.5]" /> Webhook Failed
+                          </span>
+                        )}
+                        {repo.connection_status !== 'active' && repo.connection_status !== 'warning' && repo.connection_status !== 'failed' && (
                           <button
                             onClick={() => handleToggleSelect(repo.full_name)}
                             className={`w-5.5 h-5.5 rounded-lg border flex items-center justify-center transition-all ${
@@ -369,10 +384,6 @@ const ConnectRepos = () => {
                           >
                             {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                           </button>
-                        ) : (
-                          <span className="flex items-center gap-1 text-[11px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-200 dark:border-emerald-500/20 shadow-sm shadow-emerald-500/5">
-                            <CheckCircle2 className="w-3 h-3 stroke-[2.5]" /> Connected
-                          </span>
                         )}
                       </div>
 

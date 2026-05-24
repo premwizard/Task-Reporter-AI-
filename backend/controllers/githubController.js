@@ -258,10 +258,13 @@ export const connectRepositories = async (req, res) => {
         }
         console.error('='.repeat(60) + '\n');
 
+        const errMsg = err.response?.data?.message || err.message;
+        await saveConnectedRepo(req.user.id, repoFullName, null, 'failed', errMsg);
+
         results.push({
           repo: repoFullName,
           status: 'failed',
-          error: err.response?.data?.message || err.message
+          error: errMsg
         });
       }
     }
@@ -508,15 +511,32 @@ export const getConnectedRepos = async (req, res) => {
 };
 
 // Database helper
-async function saveConnectedRepo(userId, repoFullName, webhookId, status) {
-  await pool.query(
-    `INSERT INTO connected_repositories (user_id, repository_name, webhook_id, status)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (user_id, repository_name) 
-     DO UPDATE SET webhook_id = $3, status = $4, updated_at = CURRENT_TIMESTAMP`,
-    [userId, repoFullName, webhookId, status]
-  );
+async function saveConnectedRepo(userId, repoFullName, webhookId, status, errorMessage = null) {
+  const isCreated = status === 'active';
+  const statusVal = isCreated ? 'active' : (errorMessage && errorMessage.includes('Permission') ? 'warning' : 'failed');
+  const [owner, repoName] = repoFullName.split('/');
+
+  try {
+    // Save to connected_repositories
+    await pool.query(
+      `INSERT INTO connected_repositories (user_id, repository_name, repo_name, webhook_id, webhook_created, status, error_message, last_sync, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT (user_id, repository_name)
+       DO UPDATE SET repo_name = $3, webhook_id = $4, webhook_created = $5, status = $6, error_message = $7, last_sync = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP`,
+      [userId, repoFullName, repoName, webhookId ? parseInt(webhookId) : null, isCreated, statusVal, errorMessage]
+    );
+
+    // Save to repositories table for dual tracking compatibility
+    await pool.query(
+      `INSERT INTO repositories (user_id, repo_name, repo_full_name, webhook_id, webhook_created, error_message, last_sync, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [userId, repoName, repoFullName, webhookId ? String(webhookId) : null, isCreated, errorMessage]
+    ).catch(() => {}); // catch ignore if repositories table fails
+  } catch (dbErr) {
+    console.error(`[saveConnectedRepo] ❌ DB save failed for ${repoFullName}:`, dbErr.message);
+  }
 }
+
 
 /**
  * STEP 8 — WEBHOOK REPAIR FUNCTION (audits, deletes invalid webhooks, and recreates valid webhooks on GitHub)
@@ -746,19 +766,30 @@ export const autoConnectAllRepos = async (req, res) => {
       const repoName = repo.name;
       const repoFullName = repo.full_name;
 
+      // Verify repository permissions
+      console.log(`Permissions for ${repoFullName}:`, repo.permissions);
+
       if (!repo.permissions?.admin) {
+        await saveConnectedRepo(req.user.id, repoFullName, null, 'failed', 'Permission Missing (Admin required)');
         results.push({ repo: repoFullName, status: 'skipped', reason: 'no admin permission' });
         continue;
       }
 
-      try {
-        console.log(`\n====================================`);
-        console.log(`🚀 Creating Webhook`);
-        console.log(`Repository: ${repoFullName}`);
-        console.log(`Webhook URL: ${webhookUrl}`);
-        console.log(`====================================`);
+      // STEP 2 — ADD EXTREME DEBUG LOGGING
+      console.log("====================================");
+      console.log("🚀 STARTING WEBHOOK CREATION");
+      console.log("Repository:", repoFullName);
+      console.log("Repository Owner:", owner);
+      console.log("Webhook URL:", webhookUrl);
+      console.log("Access Token Exists:", !!token);
+      console.log("====================================");
 
-        const { data: existingHooks } = await octokit.repos.listWebhooks({ owner, repo: repoName, per_page: 100 });
+      try {
+        const { data: existingHooks } = await octokit.request("GET /repos/{owner}/{repo}/hooks", {
+          owner,
+          repo: repoName,
+          per_page: 100
+        });
 
         // Remove stale/outdated hooks
         const staleHooks = existingHooks.filter(
@@ -767,7 +798,11 @@ export const autoConnectAllRepos = async (req, res) => {
         );
         for (const stale of staleHooks) {
           console.log(`   🧹 Removing stale hook ID ${stale.id}: "${stale.config?.url}"`);
-          await octokit.repos.deleteHook({ owner, repo: repoName, hook_id: stale.id }).catch(() => {});
+          await octokit.request("DELETE /repos/{owner}/{repo}/hooks/{hook_id}", {
+            owner,
+            repo: repoName,
+            hook_id: stale.id
+          }).catch(() => {});
         }
 
         // Check for existing valid hook
@@ -779,29 +814,53 @@ export const autoConnectAllRepos = async (req, res) => {
           continue;
         }
 
-        // Create fresh webhook
-        const response = await octokit.repos.createHook({
-          owner,
-          repo: repoName,
-          name: 'web',
-          active: true,
-          events: ['push'],
-          config: {
-            url: webhookUrl,
-            content_type: 'json',
-            insecure_ssl: '0',
-          },
-        });
+        // STEP 7 — VERIFY WEBHOOK API CALL
+        const response = await octokit.request(
+          "POST /repos/{owner}/{repo}/hooks",
+          {
+            owner,
+            repo: repoName,
+            name: "web",
+            active: true,
+            events: ["push"],
+            config: {
+              url: webhookUrl,
+              content_type: "json",
+              insecure_ssl: "0"
+            }
+          }
+        );
+
+        // STEP 3 — LOG GITHUB API RESPONSE
+        console.log("✅ WEBHOOK CREATED SUCCESSFULLY");
+        console.log(response.data);
 
         const hook = response.data;
-        console.log(`   ✅ Webhook Created Successfully`);
-        console.log(`   Webhook ID: ${hook.id} | URL: ${hook.config?.url} | Active: ${hook.active}`);
-
         await saveConnectedRepo(req.user.id, repoFullName, hook.id, 'active');
         results.push({ repo: repoFullName, status: 'created', webhookId: hook.id, message: 'Webhook created successfully.' });
+
+        // STEP 9 — CHECK IF WEBHOOK EXISTS
+        try {
+          const { data: afterHooks } = await octokit.request("GET /repos/{owner}/{repo}/hooks", {
+            owner,
+            repo: repoName,
+            per_page: 100
+          });
+          console.log(`🔍 [Verify Hooks] Hooks currently configured for ${repoFullName}:`, afterHooks.map(h => ({ id: h.id, url: h.config?.url, active: h.active })));
+        } catch (verifyErr) {
+          console.error("⚠️ Failed to fetch hooks for validation:", verifyErr.message);
+        }
+
       } catch (err) {
-        console.error(`   ❌ Webhook Creation Failed for ${repoFullName}:`, err.response?.data || err.message);
-        results.push({ repo: repoFullName, status: 'failed', error: err.response?.data?.message || err.message });
+        // STEP 3 — LOG GITHUB API RESPONSE (FAILURE)
+        console.error("❌ WEBHOOK CREATION FAILED");
+        console.error(err.response?.status);
+        console.error(err.response?.data);
+        console.error(err.message);
+
+        const errMsg = err.response?.data?.message || err.message;
+        await saveConnectedRepo(req.user.id, repoFullName, null, 'failed', errMsg);
+        results.push({ repo: repoFullName, status: 'failed', error: errMsg });
       }
     }
 

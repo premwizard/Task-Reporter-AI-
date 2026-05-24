@@ -31,7 +31,7 @@ export const initPassport = () => {
         clientID: process.env.GITHUB_CLIENT_ID || 'dummy_id',
         clientSecret: process.env.GITHUB_CLIENT_SECRET || 'dummy_secret',
         callbackURL: callbackUrl,
-        scope: ['user:email', 'admin:repo_hook', 'repo'],
+        scope: ['repo', 'admin:repo_hook', 'read:user', 'user:email'],
       },
       async (accessToken, refreshToken, profile, done) => {
         try {

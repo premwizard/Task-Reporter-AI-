@@ -69,11 +69,40 @@ DROP TABLE IF EXISTS connected_repositories CASCADE;
 CREATE TABLE connected_repositories (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-    repository_name VARCHAR(150) NOT NULL,
+    repository_name VARCHAR(255) NOT NULL,
+    repo_name VARCHAR(255),
     webhook_id BIGINT,
+    webhook_created BOOLEAN DEFAULT FALSE,
     status VARCHAR(50) DEFAULT 'active',
+    error_message TEXT,
+    last_sync TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, repository_name)
 );
 CREATE INDEX idx_connected_repos_user_id ON connected_repositories(user_id);
+
+-- Repositories Table (as explicitly requested in Step 4/11)
+DROP TABLE IF EXISTS repositories CASCADE;
+CREATE TABLE repositories (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    repo_name VARCHAR(255),
+    repo_full_name VARCHAR(255),
+    webhook_id VARCHAR(255),
+    webhook_created BOOLEAN DEFAULT FALSE,
+    error_message TEXT,
+    last_sync TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Migrations to add tracking columns to existing tables
+ALTER TABLE connected_repositories ADD COLUMN IF NOT EXISTS repo_name VARCHAR(255);
+ALTER TABLE connected_repositories ADD COLUMN IF NOT EXISTS webhook_created BOOLEAN DEFAULT FALSE;
+ALTER TABLE connected_repositories ADD COLUMN IF NOT EXISTS error_message TEXT;
+ALTER TABLE connected_repositories ADD COLUMN IF NOT EXISTS last_sync TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE repositories ADD COLUMN IF NOT EXISTS webhook_created BOOLEAN DEFAULT FALSE;
+ALTER TABLE repositories ADD COLUMN IF NOT EXISTS error_message TEXT;
+ALTER TABLE repositories ADD COLUMN IF NOT EXISTS last_sync TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+

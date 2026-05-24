@@ -21,7 +21,7 @@ router.get('/github', (req, res, next) => {
   console.log("Backend URL:", process.env.BACKEND_URL);
   console.log("====================================\n");
   next();
-}, passport.authenticate('github', { scope: ['user:email', 'admin:repo_hook', 'repo'] }));
+}, passport.authenticate('github', { scope: ['repo', 'admin:repo_hook', 'read:user', 'user:email'] }));
 
 // GET /auth/github/callback -> Handles Callback
 router.get(

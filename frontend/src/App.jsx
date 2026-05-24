@@ -542,7 +542,6 @@ function MainAppContent() {
           <SidebarItem id="dashboard" icon={LayoutDashboard} label="Dashboard" />
           <SidebarItem id="connect-repos" icon={Link2} label="Connect Repos" />
           <SidebarItem id="analytics" icon={Sparkles} label="AI Insights" />
-          <SidebarItem id="whatsapp" icon={MessageSquare} label="WhatsApp Bot" />
           <SidebarItem id="webhook-debug" icon={Bell} label="Webhook Monitor" />
         </div>
 
