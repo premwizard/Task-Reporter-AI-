@@ -9,7 +9,7 @@ import { getFilteredActivities, getUniqueUsers, deleteActivity, updateActivity }
  */
 export const getActivities = async (req, res) => {
     try {
-        const { employee, filter, start, end } = req.query;
+        const { employee, filter, start, end, page, limit } = req.query;
         let startDate = null;
         let endDate = null;
 
@@ -40,17 +40,18 @@ export const getActivities = async (req, res) => {
             }
         }
 
-        console.log(`[ActivityController] GET /api/activities | user: ${req.user.github_username}, role: ${req.user.role}, filter: "${filter || 'none'}"`);
-        
-        // Pass req.user.id and req.user.role for secure isolation
-        const activities = await getFilteredActivities(
+        const result = await getFilteredActivities(
             req.user.id, 
             req.user.role, 
             employee || null, 
             startDate, 
-            endDate
+            endDate,
+            null,
+            null,
+            page || null,
+            limit || null
         );
-        res.status(200).json(activities);
+        res.status(200).json(result);
     } catch (error) {
         console.error('[ActivityController] Error in getActivities:', error);
         res.status(500).json({ message: 'Internal Server Error' });

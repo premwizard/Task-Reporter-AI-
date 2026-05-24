@@ -52,10 +52,10 @@ export const getTodaysActivities = async (userId = null, userRole = 'developer')
 /**
  * Get activities filtered by optional employee name and date range
  */
-export const getFilteredActivities = async (userId, userRole, employeeName = null, startDate = null, endDate = null, repository = null, source = null) => {
+export const getFilteredActivities = async (userId, userRole, employeeName = null, startDate = null, endDate = null, repository = null, source = null, page = null, limit = null) => {
     try {
         let query = `
-            SELECT a.*, u.github_username, u.github_avatar 
+            SELECT a.*, u.github_username, u.github_avatar, COUNT(*) OVER() AS total_count 
             FROM activities a 
             LEFT JOIN users u ON a.user_id = u.id 
             WHERE 1=1
@@ -99,12 +99,40 @@ export const getFilteredActivities = async (userId, userRole, employeeName = nul
             paramIndex++;
         }
 
-        query += ` ORDER BY a.created_at DESC LIMIT 500`;
+        query += ` ORDER BY a.created_at DESC`;
 
-        console.log(`[ActivityService] Query: userId=${userId}, role=${userRole}, employee=${employeeName}, repo=${repository}`);
-        
+        if (limit) {
+            query += ` LIMIT $${paramIndex}`;
+            params.push(parseInt(limit));
+            paramIndex++;
+        } else {
+            query += ` LIMIT 500`;
+        }
+
+        if (page && limit) {
+            const offset = (parseInt(page) - 1) * parseInt(limit);
+            query += ` OFFSET $${paramIndex}`;
+            params.push(offset);
+            paramIndex++;
+        }
+
         const result = await pool.query(query, params);
-        return result.rows;
+        
+        const total = result.rows.length > 0 ? parseInt(result.rows[0].total_count) : 0;
+        
+        const activities = result.rows.map(row => {
+            const { total_count, ...cleanRow } = row;
+            return cleanRow;
+        });
+
+        return {
+            activities,
+            pagination: {
+                page: page ? parseInt(page) : 1,
+                limit: limit ? parseInt(limit) : activities.length,
+                total
+            }
+        };
     } catch (error) {
         console.error('[ActivityService] Error fetching filtered activities:', error);
         throw error;

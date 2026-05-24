@@ -354,7 +354,7 @@ export const handleGithubCallback = (req, res) => {
     const user = req.user;
     if (!user) {
       console.error('[OAuth Callback] No user found on request object');
-      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/login?error=no_user`);
+      return res.redirect(`${process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app'}/login?error=no_user`);
     }
 
     // Generate JWT
@@ -375,7 +375,7 @@ export const handleGithubCallback = (req, res) => {
     res.cookie('token', token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
@@ -386,11 +386,11 @@ export const handleGithubCallback = (req, res) => {
     setImmediate(() => autoConnectAllReposAfterLogin(user));
 
     // Redirect to frontend with token parameter
-    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, "");
+    const frontendUrl = (process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app').replace(/\/$/, "");
     res.redirect(`${frontendUrl}/oauth-success?token=${token}`);
   } catch (err) {
     console.error('[OAuth Callback] Error handling login redirect:', err);
-    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, "");
+    const frontendUrl = (process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app').replace(/\/$/, "");
     res.redirect(`${frontendUrl}/login?error=server_error`);
   }
 };
@@ -420,7 +420,10 @@ export const getMe = async (req, res) => {
  * Logout user by clearing session cookie
  */
 export const logout = (req, res) => {
-  console.log(`[Logout] Clearing cookie for user ID: ${req.user?.id || 'unknown'}`);
-  res.clearCookie('token');
+  res.clearCookie('token', {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
+  });
   res.status(200).json({ success: true, message: 'Logged out successfully' });
 };

@@ -91,6 +91,27 @@ export const createSingleActivitySummary = async (req, res) => {
             return res.status(400).json({ message: 'activity string is required' });
         }
 
+        // Cache Check: Step 17 (Prevent duplicate AI requests)
+        if (activity_id) {
+            try {
+                let cacheQuery = `SELECT ai_summary FROM activities WHERE id = $1`;
+                let cacheParams = [activity_id];
+                
+                if (req.user.role !== 'admin') {
+                    cacheQuery += ` AND user_id = $2`;
+                    cacheParams.push(req.user.id);
+                }
+                
+                const cacheRes = await pool.query(cacheQuery, cacheParams);
+                if (cacheRes.rows.length > 0 && cacheRes.rows[0].ai_summary) {
+                    console.log(`[SummaryController] 🚀 Cache HIT for activity ID ${activity_id}`);
+                    return res.status(200).json({ summary: cacheRes.rows[0].ai_summary });
+                }
+            } catch (cacheErr) {
+                console.error('[SummaryController] Cache lookup warning:', cacheErr.message);
+            }
+        }
+
         // 1. Generate explanation
         const explanation = await generateSingleActivitySummary(activity, employee_name || req.user.github_username, repository_name);
 

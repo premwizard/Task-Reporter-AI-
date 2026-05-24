@@ -5,6 +5,8 @@ import dotenv from 'dotenv';
 import passport from 'passport';
 import session from 'express-session';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 
 import webhookRoutes from './routes/webhookRoutes.js';
 import activityRoutes from './routes/activityRoutes.js';
@@ -21,7 +23,7 @@ import taskRoutes from './routes/taskRoutes.js';
 import { initPassport } from './config/passport.js';
 import { initSocketIO } from './socket.js';
 import { initCronJobs } from './cron/reportScheduler.js';
-import { initDatabase } from './database/db.js';
+import { initDatabase, pool } from './database/db.js';
 
 dotenv.config();
 
@@ -37,15 +39,38 @@ initSocketIO(httpServer);
 // Configure Passport
 initPassport();
 
-// Core Middleware
-app.use(cors({
-    origin: process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app',
-    credentials: true
+// STEP 13 — ADD SECURITY HEADERS (helmet)
+app.use(helmet({
+    contentSecurityPolicy: process.env.NODE_ENV === 'production' ? {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'"],
+            styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+            fontSrc: ["'self'", "https://fonts.gstatic.com"],
+            connectSrc: ["'self'", "https://task-reporter-ai.onrender.com", "wss://task-reporter-ai.onrender.com"]
+        }
+    } : false
 }));
-app.use(cookieParser());
-app.use(express.json());
 
-// Express Session (required for Passport GitHub Strategy)
+// STEP 2 — FIX CORS FOR PRODUCTION (Allow only the frontend URL)
+const allowedOrigin = (process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app').trim().replace(/\/$/, '');
+app.use(cors({
+    origin: allowedOrigin,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    credentials: true,
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
+
+app.use(cookieParser());
+
+// Express JSON body parser with rawBody retention for webhook signature validation (Step 14)
+app.use(express.json({
+    verify: (req, res, buf) => {
+        req.rawBody = buf;
+    }
+}));
+
+// STEP 3 — FIX COOKIE + SESSION CONFIG
 app.use(session({
     secret: process.env.SESSION_SECRET || 'super_secret_session_key_98765',
     resave: false,
@@ -53,6 +78,7 @@ app.use(session({
     cookie: {
         secure: process.env.NODE_ENV === 'production',
         httpOnly: true,
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
         maxAge: 24 * 60 * 60 * 1000 // 24 hours
     }
 }));
@@ -60,22 +86,38 @@ app.use(session({
 app.use(passport.initialize());
 app.use(passport.session());
 
-// Global Request Logger
-app.use((req, res, next) => {
-    console.log(`[${new Date().toLocaleTimeString()}] ${req.method} ${req.originalUrl}`);
-    next();
+// STEP 12 — ADD RATE LIMITING
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 200, // Limit each IP to 200 requests per window
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests from this IP, please try again after 15 minutes.' },
+    skip: (req) => {
+        // Exclude webhooks from strict rate limits to prevent dropping GitHub deliveries
+        return req.originalUrl.includes('/webhook') || req.originalUrl.includes('/api/webhook');
+    }
 });
+app.use('/api/', apiLimiter);
 
-// Authentication Routes (GET /auth/github, GET /auth/github/callback, GET /auth/me, POST /auth/logout)
+// Clean request logger: only log in development or critical events in production (Step 5)
+if (process.env.NODE_ENV !== 'production') {
+    app.use((req, res, next) => {
+        console.log(`[${new Date().toLocaleTimeString()}] ${req.method} ${req.originalUrl}`);
+        next();
+    });
+}
+
+// Authentication Routes
 app.use('/auth', authRoutes);
 app.use('/api/auth', authRoutes);
 
-// Webhook payload endpoint (receives push events from GitHub hooks)
+// Webhook payload endpoint
 app.use('/webhook', webhookRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/webhook', webhookRoutes);
 
-// Protected APIs (Repositories, Activities, Reports, AI Summaries, Exports)
+// Protected APIs
 app.use('/api/github', githubRoutes);
 app.use('/api/activities', activityRoutes);
 app.use('/api/export', exportRoutes);
@@ -86,19 +128,49 @@ app.use('/api', employeeRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/tasks', taskRoutes);
 
-// Health Check
-app.get('/test', (req, res) => {
-    res.json({ success: true, message: 'Server is running normally.' });
+// STEP 16 — ADD HEALTH CHECK ENDPOINTS
+app.get('/health', async (req, res) => {
+    try {
+        // Audit DB connection
+        await pool.query('SELECT 1');
+        res.status(200).json({
+            status: 'healthy',
+            database: 'connected',
+            uptime: process.uptime(),
+            environment: process.env.NODE_ENV || 'development',
+            timestamp: new Date().toISOString()
+        });
+    } catch (err) {
+        res.status(500).json({
+            status: 'unhealthy',
+            database: 'disconnected',
+            error: err.message,
+            timestamp: new Date().toISOString()
+        });
+    }
 });
 
-app.get('/api/health', (req, res) => {
-    const backendUrl = (process.env.BACKEND_URL || 'http://localhost:5000').trim();
-    res.json({
-        success: true,
-        backend_url: backendUrl,
-        webhook_url: `${backendUrl}/api/webhooks/github`,
-        timestamp: new Date().toISOString()
-    });
+app.get('/api/status', async (req, res) => {
+    try {
+        const dbCheck = await pool.query('SELECT COUNT(*) as total_users FROM users');
+        res.status(200).json({
+            success: true,
+            status: 'online',
+            environment: process.env.NODE_ENV || 'development',
+            database: 'connected',
+            user_count: parseInt(dbCheck.rows[0]?.total_users || 0),
+            uptime: process.uptime(),
+            timestamp: new Date().toISOString()
+        });
+    } catch (err) {
+        res.status(500).json({
+            success: false,
+            status: 'degraded',
+            database: 'disconnected',
+            error: err.message,
+            timestamp: new Date().toISOString()
+        });
+    }
 });
 
 app.get('/', (req, res) => {
@@ -114,7 +186,7 @@ const startServer = async () => {
         httpServer.listen(PORT, () => {
             console.log('====================================');
             console.log(`🚀 GitIntel Backend Running on port ${PORT}`);
-            console.log(`📡 FRONTEND_URL is set to: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
+            console.log(`📡 FRONTEND_URL is set to: ${allowedOrigin}`);
             console.log('====================================');
             initCronJobs();
         });

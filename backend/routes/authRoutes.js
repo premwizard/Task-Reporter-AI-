@@ -17,7 +17,7 @@ router.get('/github', (req, res, next) => {
   console.log("\n🚀 STARTING GITHUB LOGIN");
   console.log("====================================");
   console.log("Callback URL (redirect_uri):", callbackUrl);
-  console.log("Frontend URL:", process.env.FRONTEND_URL || 'http://localhost:3000');
+  console.log("Frontend URL:", process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app');
   console.log("Backend URL:", process.env.BACKEND_URL);
   console.log("====================================\n");
   next();
@@ -26,7 +26,7 @@ router.get('/github', (req, res, next) => {
 // GET /auth/github/callback -> Handles Callback
 router.get(
   '/github/callback',
-  passport.authenticate('github', { failureRedirect: `${(process.env.FRONTEND_URL || 'http://localhost:3000').replace(/\/$/, "")}/login?error=auth_failed`, session: false }),
+  passport.authenticate('github', { failureRedirect: `${(process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app').replace(/\/$/, "")}/login?error=auth_failed`, session: false }),
   handleGithubCallback
 );
 

@@ -207,53 +207,79 @@ async function handleManualPayload(payload) {
     }
 }
 
+import crypto from 'crypto';
+
+/**
+ * Verifies the GitHub HMAC signature.
+ */
+function verifySignature(req) {
+    const signature = req.headers['x-hub-signature-256'];
+    const secret = process.env.GITHUB_WEBHOOK_SECRET;
+
+    if (!secret) {
+        // If no webhook secret is set in env, bypass validation (graceful fallback)
+        return true;
+    }
+
+    if (!signature) {
+        return false;
+    }
+
+    try {
+        const elements = signature.split('=');
+        const signatureHash = elements[1];
+        const rawBody = req.rawBody ? req.rawBody.toString() : JSON.stringify(req.body);
+        const expectedHash = crypto
+            .createHmac('sha256', secret)
+            .update(rawBody)
+            .digest('hex');
+
+        return crypto.timingSafeEqual(
+            Buffer.from(signatureHash, 'utf8'),
+            Buffer.from(expectedHash, 'utf8')
+        );
+    } catch (err) {
+        console.error('❌ [Security] Webhook signature verification error:', err.message);
+        return false;
+    }
+}
+
 /**
  * Main webhook controller
  */
 export const handleGithubWebhook = async (req, res) => {
-    // Acknowledge webhook delivery to GitHub immediately
-    res.status(200).json({ success: true, message: 'Webhook event received and scheduled for parsing' });
+    const githubEvent = req.headers['x-github-event'] || 'unknown';
+    
+    // Verify GitHub payload authenticity (Step 14)
+    if (!verifySignature(req)) {
+        console.error('❌ [Security] Webhook rejected: Invalid GitHub signature.');
+        return res.status(401).json({ error: 'Invalid webhook signature.' });
+    }
 
-    console.log('\n====================================');
-    console.log('⚡ WEBHOOK CONTROLLER RECEIVED EVENT');
-    console.log('====================================');
+    // Acknowledge webhook delivery to GitHub immediately
+    res.status(200).json({ success: true, message: 'Webhook event received and verified' });
 
     try {
-        const payload    = req.body;
-        const githubEvent = req.headers['x-github-event'] || 'unknown';
+        const payload = req.body;
 
-        // STEP 7 — HANDLE COMMON ERRORS
         if (!payload || Object.keys(payload).length === 0) {
-            console.error('❌ [Webhook Error] 400 Bad Request: Empty payload received. Body is undefined.');
+            console.error('❌ [Webhook Error] Empty payload received.');
             return;
         }
-
-        console.log(`📡 GitHub Event Header: ${githubEvent}`);
 
         const isGithubPush = !!(payload.repository && Array.isArray(payload.commits));
         const isManual     = !!(payload.employee_name && payload.activity);
 
-        console.log(`🔍 Routing Type: isGithubPush=${isGithubPush}, isManual=${isManual}`);
-
         if (isGithubPush) {
             if (githubEvent !== 'push' && githubEvent !== 'unknown') {
-                console.log(`⚠️  [Webhook Route] Bypassing event type "${githubEvent}". Only "push" events are processed.`);
                 return;
             }
             await handleGithubPayload(payload);
-
         } else if (isManual) {
             await handleManualPayload(payload);
-
-        } else {
-            console.warn('⚠️  [Webhook Route] Unrecognised or malformed payload layout. Ignoring request.');
         }
-
-        console.log('\n====================================');
-        console.log('✅ Webhook process finished successfully');
-        console.log('====================================\n');
-
     } catch (err) {
-        console.error('❌ [Webhook Crash] Unexpected critical server error in handler:', err.message);
+        console.error('❌ [Webhook Crash] Unexpected error in handler:', err.message);
     }
 };
+

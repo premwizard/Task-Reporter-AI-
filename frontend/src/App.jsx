@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
@@ -10,23 +10,58 @@ import {
   FileSpreadsheet, Link2, Key
 } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import Login from './pages/Login';
-import Register from './pages/Register';
-import ConnectRepos from './pages/ConnectRepos';
-import WhatsAppSetup from './pages/WhatsAppSetup';
-import AIReports from './pages/AIReports';
-import WebhookMonitor from './pages/WebhookMonitor';
-import OAuthSuccess from './pages/OAuthSuccess';
 import api from './services/api';
 import toast, { Toaster } from 'react-hot-toast';
+
+// STEP 6 & 21: Lazy load pages with graceful suspense fallbacks
+const Login = React.lazy(() => import('./pages/Login'));
+const Register = React.lazy(() => import('./pages/Register'));
+const ConnectRepos = React.lazy(() => import('./pages/ConnectRepos'));
+const WhatsAppSetup = React.lazy(() => import('./pages/WhatsAppSetup'));
+const AIReports = React.lazy(() => import('./pages/AIReports'));
+const WebhookMonitor = React.lazy(() => import('./pages/WebhookMonitor'));
+const OAuthSuccess = React.lazy(() => import('./pages/OAuthSuccess'));
 
 const SOCKET_URL = import.meta.env.VITE_API_URL 
   ? import.meta.env.VITE_API_URL.replace('/api', '') 
   : 'https://task-reporter-ai.onrender.com';
 
-// ── Shared UI Components ─────────────────────────────────────────────
+// ── STEP 21: ERROR BOUNDARY IMPLEMENTATION ────────────────────────────
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, errorInfo) {
+    console.error('[ErrorBoundary caught crash]', error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-[#07090e] flex flex-col items-center justify-center p-6 text-center font-sans">
+          <div className="w-16 h-16 bg-rose-500/10 text-rose-500 flex items-center justify-center rounded-2xl mb-6">
+            <Bot className="w-8 h-8 animate-bounce" />
+          </div>
+          <h1 className="text-2xl font-bold text-white mb-2">Something went wrong</h1>
+          <p className="text-zinc-400 max-w-md mb-6 text-sm">
+            {this.state.error?.message || 'An unexpected rendering error occurred. Please refresh or try again.'}
+          </p>
+          <button onClick={() => window.location.reload()} className="btn-primary">
+            Refresh Application
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
-const SourceBadge = ({ source }) => {
+// ── STEP 7: MEMOIZED COMPONENTS ───────────────────────────────────────
+
+const SourceBadge = React.memo(({ source }) => {
   const styles = {
     github: 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700',
     manual: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20',
@@ -40,7 +75,9 @@ const SourceBadge = ({ source }) => {
       {Icons[source] || Icons.manual} {source}
     </span>
   );
-};
+});
+
+SourceBadge.displayName = 'SourceBadge';
 
 const ActivitySkeleton = () => (
   <div className="glass-card p-5 animate-shimmer flex flex-col space-y-4">
@@ -59,7 +96,7 @@ const ActivitySkeleton = () => (
   </div>
 );
 
-const StatCard = ({ title, value, icon: Icon, trend, colorClass }) => (
+const StatCard = React.memo(({ title, value, icon: Icon, trend, colorClass }) => (
   <motion.div 
     whileHover={{ y: -4 }}
     className="glass-card p-5 flex items-center gap-4 relative overflow-hidden group"
@@ -76,7 +113,9 @@ const StatCard = ({ title, value, icon: Icon, trend, colorClass }) => (
       </div>
     </div>
   </motion.div>
-);
+));
+
+StatCard.displayName = 'StatCard';
 
 // ── Modals ────────────────────────────────────────────────────────────
 
@@ -90,7 +129,7 @@ const EditModal = ({ activity, onClose, onSaved }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setSaving(false);
+    setSaving(true);
     toast.loading('Saving changes...');
     try {
       await api.put(`/activities/${activity.id}`, formData);
@@ -99,42 +138,57 @@ const EditModal = ({ activity, onClose, onSaved }) => {
       onSaved();
     } catch (err) {
       toast.dismiss();
-      toast.error('Failed to update activity: ' + err.message);
+      toast.error('Failed to update: ' + err.message);
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 dark:bg-black/60 backdrop-blur-sm animate-fadeIn">
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <motion.div 
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.95 }}
-        className="glass-card w-full max-w-lg overflow-hidden shadow-2xl"
+        initial={{ scale: 0.95, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.95, opacity: 0 }}
+        className="glass-card w-full max-w-lg p-6 relative overflow-hidden"
       >
-        <div className="px-6 py-4 border-b border-slate-100 dark:border-zinc-800 flex justify-between items-center bg-slate-50/50 dark:bg-zinc-900/50">
-          <h2 className="text-lg font-bold text-slate-800 dark:text-white flex items-center gap-2">
-            <Edit3 className="w-5 h-5 text-violet-500" /> Edit Activity
-          </h2>
-          <button onClick={onClose} className="btn-icon">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 font-sans">
+        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 dark:hover:text-white">
+          <X className="w-5 h-5" />
+        </button>
+        <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-6">Modify Logged Activity</h3>
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-semibold text-slate-700 dark:text-zinc-300 mb-1.5">Employee Name</label>
-            <input type="text" className="input-premium" value={formData.employee_name} onChange={e => setFormData({...formData, employee_name: e.target.value})} required />
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-wide">Developer Name</label>
+            <input 
+              type="text" 
+              value={formData.employee_name} 
+              onChange={e => setFormData({ ...formData, employee_name: e.target.value })} 
+              className="input-premium mt-1.5 w-full" 
+              required 
+            />
           </div>
           <div>
-            <label className="block text-sm font-semibold text-slate-700 dark:text-zinc-300 mb-1.5">Repository</label>
-            <input type="text" className="input-premium" value={formData.repository_name} onChange={e => setFormData({...formData, repository_name: e.target.value})} />
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-wide">Repository (Optional)</label>
+            <input 
+              type="text" 
+              value={formData.repository_name} 
+              onChange={e => setFormData({ ...formData, repository_name: e.target.value })} 
+              className="input-premium mt-1.5 w-full" 
+            />
           </div>
           <div>
-            <label className="block text-sm font-semibold text-slate-700 dark:text-zinc-300 mb-1.5">Activity Message</label>
-            <textarea className="input-premium min-h-[100px] resize-y" value={formData.activity} onChange={e => setFormData({...formData, activity: e.target.value})} required />
+            <label className="text-xs font-bold text-slate-500 uppercase tracking-wide">Activity Description</label>
+            <textarea 
+              rows={4}
+              value={formData.activity} 
+              onChange={e => setFormData({ ...formData, activity: e.target.value })} 
+              className="input-premium mt-1.5 w-full resize-none" 
+              required 
+            />
           </div>
           <div className="flex justify-end gap-3 pt-4 border-t border-slate-100 dark:border-zinc-800">
             <button type="button" onClick={onClose} className="btn-secondary">Cancel</button>
-            <button type="submit" className="btn-primary">Save Changes</button>
+            <button type="submit" disabled={saving} className="btn-primary">{saving ? 'Saving...' : 'Apply Changes'}</button>
           </div>
         </form>
       </motion.div>
@@ -142,16 +196,19 @@ const EditModal = ({ activity, onClose, onSaved }) => {
   );
 };
 
-// ── Views ─────────────────────────────────────────────────────────────
+// ── STEP 7: MEMOIZED ROW + CARD FEED COMPONENTS ──────────────────────
 
-const ActivityCard = ({ act, onEdit, onDelete }) => {
+const ActivityCard = React.memo(({ act, onEdit, onDelete }) => {
   const { user } = useAuth();
   const [aiSummary, setAiSummary] = useState(act.ai_summary || null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(!!act.ai_summary);
 
   const handleExplain = async () => {
-    if (aiSummary) return setExpanded(!expanded);
+    if (aiSummary) {
+      setExpanded(!expanded);
+      return;
+    }
     setLoading(true); 
     setExpanded(true);
     try {
@@ -163,7 +220,7 @@ const ActivityCard = ({ act, onEdit, onDelete }) => {
       });
       setAiSummary(data.summary);
     } catch (err) {
-      toast.error('AI translation failed: ' + err.message);
+      toast.error('AI synthesis failed: ' + err.message);
       setExpanded(false);
     } finally { 
       setLoading(false); 
@@ -173,15 +230,16 @@ const ActivityCard = ({ act, onEdit, onDelete }) => {
   return (
     <motion.div 
       layout
-      initial={{ opacity: 0, y: 10 }}
+      initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, scale: 0.95 }}
-      className="glass-card-interactive p-5 flex flex-col justify-between"
+      exit={{ opacity: 0, y: -12 }}
+      transition={{ duration: 0.2 }}
+      className={`glass-card p-6 flex flex-col justify-between border-slate-200/60 dark:border-zinc-800/60 ${expanded ? 'shadow-lg shadow-violet-500/[0.02]' : ''}`}
     >
       <div>
-        <div className="flex justify-between items-start mb-4">
+        <div className="flex items-center justify-between gap-4 mb-4">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-slate-200 to-slate-100 dark:from-zinc-800 dark:to-zinc-700 flex items-center justify-center text-slate-500 dark:text-zinc-400 font-bold border border-white/50 dark:border-zinc-700 shadow-sm overflow-hidden">
+            <div className="w-10 h-10 rounded-xl bg-slate-100 dark:bg-zinc-800/80 flex items-center justify-center text-sm font-bold text-slate-700 dark:text-zinc-300 overflow-hidden border border-slate-200/50 dark:border-zinc-700/50">
               {user?.github_avatar && act.employee_name === user.github_username ? (
                 <img src={user.github_avatar} alt="Avatar" className="w-full h-full object-cover" />
               ) : (
@@ -189,10 +247,10 @@ const ActivityCard = ({ act, onEdit, onDelete }) => {
               )}
             </div>
             <div>
-              <h4 className="text-sm font-bold text-slate-900 dark:text-white leading-tight">{act.employee_name}</h4>
-              <span className="text-xs font-medium text-slate-500 dark:text-zinc-400">
-                {new Date(act.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-              </span>
+              <h4 className="font-bold text-slate-850 dark:text-zinc-100 text-[15px]">{act.employee_name}</h4>
+              <p className="text-xs font-semibold text-slate-400 dark:text-zinc-500 mt-0.5">
+                {new Date(act.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} at {new Date(act.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+              </p>
             </div>
           </div>
           <SourceBadge source={act.source} />
@@ -264,9 +322,11 @@ const ActivityCard = ({ act, onEdit, onDelete }) => {
       </div>
     </motion.div>
   );
-};
+});
 
-const ActivityTableRow = ({ act, onEdit, onDelete }) => {
+ActivityCard.displayName = 'ActivityCard';
+
+const ActivityTableRow = React.memo(({ act, onEdit, onDelete }) => {
   const { user } = useAuth();
   const [aiSummary, setAiSummary] = useState(act.ai_summary || null);
   const [loading, setLoading] = useState(false);
@@ -352,7 +412,9 @@ const ActivityTableRow = ({ act, onEdit, onDelete }) => {
       </AnimatePresence>
     </>
   );
-};
+});
+
+ActivityTableRow.displayName = 'ActivityTableRow';
 
 // ── Protected Dashboard Shell ─────────────────────────────────────────
 
@@ -388,6 +450,10 @@ function MainAppContent() {
   const [generatingSummary, setGeneratingSummary] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  // STEP 11: PAGINATION STATE
+  const [page, setPage] = useState(1);
+  const [pagination, setPagination] = useState(null);
+
   // Theme effect
   useEffect(() => {
     const root = window.document.documentElement;
@@ -403,7 +469,7 @@ function MainAppContent() {
   // View mode persist
   useEffect(() => localStorage.setItem('viewMode', viewMode), [viewMode]);
 
-  // Socket setup (Secure User-Isolated updates)
+  // Socket setup (Secure User-Isolated updates - polling optimized out in Step 8)
   useEffect(() => {
     if (!user) return;
     
@@ -413,7 +479,6 @@ function MainAppContent() {
     socket.on('connect', () => console.log('[Socket] Connection success'));
     
     socket.on('new_activity', (activity) => {
-      // Security Check: Only sync in real-time if Admin or matches user id
       if (user.role === 'admin' || activity.user_id === user.id) {
         setActivities(prev => [activity, ...prev]);
         setIsLive(true);
@@ -425,19 +490,38 @@ function MainAppContent() {
     return () => socket.disconnect();
   }, [user]);
 
-  // Fetch data
+  // Reset page when filter changes
+  useEffect(() => {
+    setPage(1);
+  }, [selectedUser, dateFilter]);
+
+  // Fetch data (Step 11 - Paginated and Optimized database requests)
   const fetchData = async () => {
     setLoading(true); 
     setError(null);
     try {
-      const params = {};
+      const params = {
+        page,
+        limit: 20
+      };
       if (selectedUser) params.employee = selectedUser;
       if (dateFilter && dateFilter !== 'all') params.filter = dateFilter;
       
-      const aData = await api.get('/activities', params);
-      setActivities(aData);
+      const response = await api.get('/activities', { params });
       
-      // Fetch users list only for admins to populate filtering options
+      // Support backward compatibility with non-paginated arrays
+      if (response && response.activities) {
+        setActivities(response.activities);
+        setPagination(response.pagination);
+      } else {
+        setActivities(response || []);
+        setPagination({
+          page: 1,
+          limit: response?.length || 20,
+          total: response?.length || 0
+        });
+      }
+      
       if (user?.role === 'admin') {
         const uData = await api.get('/activities/users');
         setUsersList(uData);
@@ -452,9 +536,9 @@ function MainAppContent() {
 
   useEffect(() => { 
     if (user) fetchData(); 
-  }, [selectedUser, dateFilter, user]);
+  }, [selectedUser, dateFilter, user, page]);
 
-  const handleDelete = async (id) => {
+  const handleDelete = useCallback(async (id) => {
     if (!window.confirm('Delete this activity permanently?')) return;
     try {
       await api.delete(`/activities/${id}`);
@@ -463,7 +547,7 @@ function MainAppContent() {
     } catch (err) { 
       toast.error('Delete failed: ' + err.message); 
     }
-  };
+  }, []);
 
   const handleExport = (type) => {
     setExportOpen(false);
@@ -472,9 +556,8 @@ function MainAppContent() {
     if (dateFilter && dateFilter !== 'all') params.filter = dateFilter;
     
     const qs = new URLSearchParams(params).toString();
-    const backendBase = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+    const backendBase = import.meta.env.VITE_API_URL || 'https://task-reporter-ai.onrender.com/api';
     
-    // Cookie is passed securely on SameSite Lax trigger
     window.open(`${backendBase}/export/${type}?${qs}`, '_blank');
   };
 
@@ -496,18 +579,18 @@ function MainAppContent() {
     }
   };
 
-  // Metrics (isolated dynamically based on state)
+  // Metrics (Step 7: useMemo optimizes metrics calculation)
   const metrics = useMemo(() => {
     const today = new Date().setHours(0,0,0,0);
     return {
-      total: activities.length,
+      total: pagination?.total || activities.length,
       today: activities.filter(a => new Date(a.created_at).setHours(0,0,0,0) === today).length,
-      users: new Set(activities.map(a => a.employee_name)).size,
+      users: new Set(activities.map(a => a.employee_name)).size || 1,
       aiCount: activities.filter(a => a.ai_summary).length
     };
-  }, [activities]);
+  }, [activities, pagination]);
 
-  const SidebarItem = ({ icon: Icon, label, id }) => (
+  const SidebarItem = useCallback(({ icon: Icon, label, id }) => (
     <button 
       onClick={() => setActiveTab(id)}
       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all font-semibold ${
@@ -519,7 +602,7 @@ function MainAppContent() {
       <Icon className="w-5 h-5 flex-shrink-0" />
       {!isSidebarCollapsed && <span>{label}</span>}
     </button>
-  );
+  ), [activeTab, isSidebarCollapsed]);
 
   return (
     <div className="flex h-screen bg-[var(--background)] overflow-hidden font-sans">
@@ -545,7 +628,7 @@ function MainAppContent() {
           <SidebarItem id="webhook-debug" icon={Bell} label="Webhook Monitor" />
         </div>
 
-        {/* User profile details at the bottom of sidebar */}
+        {/* User profile details */}
         <div className="p-4 border-t border-slate-200 dark:border-zinc-800 flex flex-col gap-3">
           <div className={`flex items-center gap-3 ${isSidebarCollapsed ? 'justify-center' : ''}`}>
             {user?.github_avatar ? (
@@ -616,205 +699,260 @@ function MainAppContent() {
           </div>
         </header>
 
-        {/* Scrollable Content */}
+        {/* Scrollable Content (Step 6: Suspense boundary ensures page loading split) */}
         <div className="flex-1 overflow-y-auto p-4 md:p-8 scroll-smooth">
-          {activeTab === 'whatsapp' && <WhatsAppSetup />}
-          {activeTab === 'analytics' && <AIReports />}
-          {activeTab === 'connect-repos' && <ConnectRepos />}
-          {activeTab === 'webhook-debug' && <WebhookMonitor />}
-          {activeTab === 'dashboard' && (
-            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-7xl mx-auto space-y-6">
-              
-              {/* Header section */}
-              <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
-                <div>
-                  <h1 className="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">Intelligence Dashboard</h1>
-                  <p className="text-slate-500 dark:text-zinc-400 mt-1">Real-time overview of engineering activity and AI insights.</p>
-                </div>
-                <div className="flex items-center gap-2 relative">
-                  {/* Export Dropdown */}
-                  <div className="relative">
-                    <button 
-                      onClick={() => setExportOpen(!exportOpen)} 
-                      className="btn-secondary pr-3"
-                    >
-                      <Download className="w-4 h-4" /> Export
-                      <ChevronDown className={`w-3.5 h-3.5 transition-transform ${exportOpen ? 'rotate-180' : ''}`} />
-                    </button>
+          <React.Suspense fallback={
+            <div className="min-h-[400px] flex flex-col items-center justify-center animate-pulse gap-3">
+              <RefreshCw className="w-8 h-8 text-violet-500 animate-spin" />
+              <p className="text-xs font-semibold text-zinc-400">Loading module resources...</p>
+            </div>
+          }>
+            {activeTab === 'whatsapp' && <WhatsAppSetup />}
+            {activeTab === 'analytics' && <AIReports />}
+            {activeTab === 'connect-repos' && <ConnectRepos />}
+            {activeTab === 'webhook-debug' && <WebhookMonitor />}
+            {activeTab === 'dashboard' && (
+              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-7xl mx-auto space-y-6">
+                
+                {/* Header section */}
+                <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
+                  <div>
+                    <h1 className="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">Intelligence Dashboard</h1>
+                    <p className="text-slate-500 dark:text-zinc-400 mt-1">Real-time overview of engineering activity and AI insights.</p>
+                  </div>
+                  <div className="flex items-center gap-2 relative">
+                    {/* Export Dropdown */}
+                    <div className="relative">
+                      <button 
+                        onClick={() => setExportOpen(!exportOpen)} 
+                        className="btn-secondary pr-3"
+                      >
+                        <Download className="w-4 h-4" /> Export
+                        <ChevronDown className={`w-3.5 h-3.5 transition-transform ${exportOpen ? 'rotate-180' : ''}`} />
+                      </button>
 
-                    <AnimatePresence>
-                      {exportOpen && (
-                        <>
-                          <div 
-                            className="fixed inset-0 z-40" 
-                            onClick={() => setExportOpen(false)}
-                          ></div>
-                          
-                          <motion.div 
-                            initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                            animate={{ opacity: 1, y: 0, scale: 1 }}
-                            exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                            className="absolute right-0 top-full mt-2 w-48 glass-card border-slate-200 dark:border-zinc-800 shadow-xl z-50 overflow-hidden"
-                          >
-                            <div className="py-1">
-                              <div className="px-3 py-2 border-b border-slate-100 dark:border-zinc-800">
-                                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-zinc-500">Download Format</p>
+                      <AnimatePresence>
+                        {exportOpen && (
+                          <>
+                            <div 
+                              className="fixed inset-0 z-40" 
+                              onClick={() => setExportOpen(false)}
+                            ></div>
+                            
+                            <motion.div 
+                              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                              className="absolute right-0 top-full mt-2 w-48 glass-card border-slate-200 dark:border-zinc-800 shadow-xl z-50 overflow-hidden"
+                            >
+                              <div className="py-1">
+                                <div className="px-3 py-2 border-b border-slate-100 dark:border-zinc-800">
+                                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-zinc-500">Download Format</p>
+                                </div>
+                                <button 
+                                  onClick={() => handleExport('csv')}
+                                  className="w-full text-left px-4 py-2.5 text-sm font-medium text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800/80 hover:text-primary transition-colors flex items-center gap-2 cursor-pointer"
+                                >
+                                  <FileSpreadsheet className="w-4 h-4 text-emerald-500" /> Export CSV
+                                </button>
+                                <button 
+                                  onClick={() => handleExport('excel')}
+                                  className="w-full text-left px-4 py-2.5 text-sm font-medium text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800/80 hover:text-primary transition-colors flex items-center gap-2 cursor-pointer"
+                                >
+                                  <FileSpreadsheet className="w-4 h-4 text-emerald-600" /> Export Excel
+                                </button>
+                                <button 
+                                  onClick={() => handleExport('pdf')}
+                                  className="w-full text-left px-4 py-2.5 text-sm font-medium text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800/80 hover:text-primary transition-colors flex items-center gap-2 cursor-pointer"
+                                >
+                                  <FileText className="w-4 h-4 text-rose-500" /> Export PDF
+                                </button>
                               </div>
-                              <button 
-                                onClick={() => handleExport('csv')}
-                                className="w-full text-left px-4 py-2.5 text-sm font-medium text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800/80 hover:text-primary transition-colors flex items-center gap-2 cursor-pointer"
-                              >
-                                <FileSpreadsheet className="w-4 h-4 text-emerald-500" /> Export CSV
-                              </button>
-                              <button 
-                                onClick={() => handleExport('excel')}
-                                className="w-full text-left px-4 py-2.5 text-sm font-medium text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800/80 hover:text-primary transition-colors flex items-center gap-2 cursor-pointer"
-                              >
-                                <FileSpreadsheet className="w-4 h-4 text-emerald-600" /> Export Excel
-                              </button>
-                              <button 
-                                onClick={() => handleExport('pdf')}
-                                className="w-full text-left px-4 py-2.5 text-sm font-medium text-slate-700 dark:text-zinc-300 hover:bg-slate-50 dark:hover:bg-zinc-800/80 hover:text-primary transition-colors flex items-center gap-2 cursor-pointer"
-                              >
-                                <FileText className="w-4 h-4 text-rose-500" /> Export PDF
-                              </button>
+                            </motion.div>
+                          </>
+                        )}
+                      </AnimatePresence>
+                    </div>
+
+                    <button onClick={handleGenerateGlobalSummary} disabled={generatingSummary} className="btn-primary">
+                      <Sparkles className="w-4 h-4" /> {generatingSummary ? 'Synthesizing...' : 'Generate Insight'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Stats Grid */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <StatCard title="Total Activities" value={metrics.total} icon={Activity} colorClass="from-blue-500 to-cyan-500" />
+                  <StatCard title="Today's Commits" value={metrics.today} icon={Calendar} trend="+12% from yesterday" colorClass="from-emerald-500 to-teal-500" />
+                  <StatCard title="Active Developers" value={metrics.users} icon={Users} colorClass="from-orange-500 to-amber-500" />
+                  <StatCard title="AI Explanations" value={metrics.aiCount} icon={Bot} colorClass="from-violet-500 to-fuchsia-500" />
+                </div>
+
+                {/* Global AI Summary Display */}
+                <AnimatePresence>
+                  {aiSummary && (
+                    <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
+                      <div className="glass-card p-6 bg-gradient-to-br from-violet-500/5 to-fuchsia-500/5 border border-violet-200 dark:border-violet-500/20 relative mt-2">
+                        <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-violet-500 to-fuchsia-500"></div>
+                        <div className="flex justify-between items-start mb-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-violet-100 dark:bg-violet-500/20 text-violet-600 dark:text-violet-400 flex items-center justify-center">
+                              <Sparkles className="w-5 h-5" />
                             </div>
-                          </motion.div>
-                        </>
-                      )}
-                    </AnimatePresence>
+                            <div>
+                              <h3 className="text-base font-bold text-slate-900 dark:text-white">Executive AI Summary</h3>
+                              <p className="text-xs text-slate-500 dark:text-zinc-400">Synthesized using Groq Llama 3</p>
+                            </div>
+                          </div>
+                          <button onClick={() => { navigator.clipboard.writeText(aiSummary.summary); setCopied(true); setTimeout(()=>setCopied(false), 2000); }} className="btn-icon text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-500/10 hover:bg-violet-100 dark:hover:bg-violet-500/20">
+                            {copied ? <CheckCircle className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+                          </button>
+                        </div>
+                        <p className="pl-14 text-slate-700 dark:text-zinc-200 text-sm leading-relaxed font-semibold">
+                          {aiSummary.summary}
+                        </p>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Filters & Toggles */}
+                <div className="glass-panel p-2 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4 sticky top-0 z-10">
+                  <div className="flex items-center gap-2 w-full md:w-auto">
+                    {user?.role === 'admin' ? (
+                      <>
+                        <div className="relative">
+                          <Users className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                          <select value={selectedUser} onChange={e => setSelectedUser(e.target.value)} className="input-premium pl-9 py-2 bg-transparent border-none w-[180px] cursor-pointer appearance-none">
+                            <option value="">All Developers</option>
+                            {usersList.map(u => <option key={u} value={u}>{u}</option>)}
+                          </select>
+                        </div>
+                        <div className="w-px h-6 bg-slate-200 dark:bg-zinc-800"></div>
+                      </>
+                    ) : null}
+                    
+                    <div className="relative">
+                      <Calendar className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <select value={dateFilter} onChange={e => setDateFilter(e.target.value)} className="input-premium pl-9 py-2 bg-transparent border-none w-[140px] cursor-pointer appearance-none">
+                        <option value="all">All Time</option>
+                        <option value="today">Today</option>
+                        <option value="yesterday">Yesterday</option>
+                        <option value="last7days">Last 7 Days</option>
+                      </select>
+                    </div>
                   </div>
 
-                  <button onClick={handleGenerateGlobalSummary} disabled={generatingSummary} className="btn-primary">
-                    <Sparkles className="w-4 h-4" /> {generatingSummary ? 'Synthesizing...' : 'Generate Insight'}
-                  </button>
+                  <div className="flex items-center bg-slate-100 dark:bg-zinc-900/80 p-1 rounded-xl border border-slate-200 dark:border-zinc-800/80">
+                    <button onClick={() => setViewMode('card')} className={`p-1.5 rounded-lg transition-all ${viewMode === 'card' ? 'bg-white dark:bg-zinc-800 shadow-sm text-slate-800 dark:text-white' : 'text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300'}`}>
+                      <LayoutGrid className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => setViewMode('table')} className={`p-1.5 rounded-lg transition-all ${viewMode === 'table' ? 'bg-white dark:bg-zinc-800 shadow-sm text-slate-800 dark:text-white' : 'text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300'}`}>
+                      <List className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
-              </div>
 
-              {/* Stats Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <StatCard title="Total Activities" value={metrics.total} icon={Activity} colorClass="from-blue-500 to-cyan-500" />
-                <StatCard title="Today's Commits" value={metrics.today} icon={Calendar} trend="+12% from yesterday" colorClass="from-emerald-500 to-teal-500" />
-                <StatCard title="Active Developers" value={metrics.users} icon={Users} colorClass="from-orange-500 to-amber-500" />
-                <StatCard title="AI Explanations" value={metrics.aiCount} icon={Bot} colorClass="from-violet-500 to-fuchsia-500" />
-              </div>
+                {/* STEP 9 & 20: Feed Container with graceful empty states, retries, and loaders */}
+                <div className="min-h-[400px]">
+                  {loading ? (
+                    <div className="space-y-4">
+                      {[1, 2, 3].map(i => <ActivitySkeleton key={i} />)}
+                    </div>
+                  ) : error ? (
+                    <div className="glass-card p-12 text-center border-rose-500/20 bg-rose-500/[0.01]">
+                      <Bot className="w-12 h-12 text-rose-500 mx-auto mb-4 animate-bounce" />
+                      <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">Failed to Sync Feed</h3>
+                      <p className="text-sm text-slate-500 dark:text-zinc-400 max-w-md mx-auto mb-6">{error}</p>
+                      <button onClick={fetchData} className="btn-primary">
+                        Retry Fetch
+                      </button>
+                    </div>
+                  ) : activities.length === 0 ? (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card p-16 text-center flex flex-col items-center justify-center">
+                      <div className="w-20 h-20 rounded-2xl bg-slate-100 dark:bg-zinc-800/50 flex items-center justify-center text-slate-400 dark:text-zinc-500 mb-6 rotate-3">
+                        <Search className="w-10 h-10" />
+                      </div>
+                      {/* STEP 20: SPECIFIC EMPTY STATE TEXT */}
+                      <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">No activity yet</h3>
+                      <p className="text-slate-500 dark:text-zinc-400 max-w-md mb-6">
+                        No activity yet. Push commits to connected repositories.
+                      </p>
+                      <button onClick={() => { setSelectedUser(''); setDateFilter('all'); }} className="btn-secondary">
+                        Reset Filters
+                      </button>
+                    </motion.div>
+                  ) : viewMode === 'table' ? (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card overflow-hidden border-slate-200/60 dark:border-zinc-800/60">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse">
+                          <thead className="bg-slate-50/50 dark:bg-zinc-900/50 backdrop-blur-sm border-b border-slate-200 dark:border-zinc-800">
+                            <tr>
+                              <th className="px-4 py-3.5 text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">Employee</th>
+                              <th className="px-4 py-3.5 text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">Repository</th>
+                              <th className="px-4 py-3.5 text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">Activity</th>
+                              <th className="px-4 py-3.5 text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">Source</th>
+                              <th className="px-4 py-3.5 text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">Timestamp</th>
+                              <th className="px-4 py-3.5 text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-zinc-800/50">
+                            {activities.map(act => (
+                              <ActivityTableRow 
+                                key={act.id} 
+                                act={act} 
+                                onEdit={setEditTarget} 
+                                onDelete={handleDelete} 
+                              />
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </motion.div>
+                  ) : (
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      <AnimatePresence>
+                        {activities.map(act => (
+                          <ActivityCard 
+                            key={act.id} 
+                            act={act} 
+                            onEdit={setEditTarget} 
+                            onDelete={handleDelete} 
+                          />
+                        ))}
+                      </AnimatePresence>
+                    </motion.div>
+                  )}
 
-              {/* Global AI Summary Display */}
-              <AnimatePresence>
-                {aiSummary && (
-                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="overflow-hidden">
-                    <div className="glass-card p-6 bg-gradient-to-br from-violet-500/5 to-fuchsia-500/5 border border-violet-200 dark:border-violet-500/20 relative mt-2">
-                      <div className="absolute top-0 left-0 w-1 h-full bg-gradient-to-b from-violet-500 to-fuchsia-500"></div>
-                      <div className="flex justify-between items-start mb-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-violet-100 dark:bg-violet-500/20 text-violet-600 dark:text-violet-400 flex items-center justify-center">
-                            <Sparkles className="w-5 h-5" />
-                          </div>
-                          <div>
-                            <h3 className="text-base font-bold text-slate-900 dark:text-white">Executive AI Summary</h3>
-                            <p className="text-xs text-slate-500 dark:text-zinc-400">Synthesized using Groq Llama 3</p>
-                          </div>
-                        </div>
-                        <button onClick={() => { navigator.clipboard.writeText(aiSummary.summary); setCopied(true); setTimeout(()=>setCopied(false), 2000); }} className="btn-icon text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-500/10 hover:bg-violet-100 dark:hover:bg-violet-500/20">
-                          {copied ? <CheckCircle className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+                  {/* STEP 11: PAGINATION BOTTOM CONTROLS */}
+                  {pagination && pagination.total > pagination.limit && (
+                    <div className="flex items-center justify-between border-t border-slate-200 dark:border-zinc-800 pt-6 mt-6">
+                      <p className="text-xs font-semibold text-slate-500 dark:text-zinc-400">
+                        Showing <span className="text-slate-900 dark:text-white">{((page - 1) * pagination.limit) + 1}</span> to <span className="text-slate-900 dark:text-white">{Math.min(page * pagination.limit, pagination.total)}</span> of <span className="text-slate-900 dark:text-white">{pagination.total}</span> activities
+                      </p>
+                      <div className="flex gap-2">
+                        <button 
+                          disabled={page <= 1} 
+                          onClick={() => setPage(p => Math.max(1, p - 1))}
+                          className="btn-secondary py-1.5 px-3 disabled:opacity-50 text-xs font-bold"
+                        >
+                          Previous
+                        </button>
+                        <button 
+                          disabled={page >= Math.ceil(pagination.total / pagination.limit)} 
+                          onClick={() => setPage(p => p + 1)}
+                          className="btn-secondary py-1.5 px-3 disabled:opacity-50 text-xs font-bold"
+                        >
+                          Next
                         </button>
                       </div>
-                      <p className="pl-14 text-slate-700 dark:text-zinc-200 text-sm leading-relaxed font-semibold">
-                        {aiSummary.summary}
-                      </p>
                     </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {/* Filters & View Toggles */}
-              <div className="glass-panel p-2 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4 sticky top-0 z-10">
-                <div className="flex items-center gap-2 w-full md:w-auto">
-                  {/* Security check: only admins can select developers */}
-                  {user?.role === 'admin' ? (
-                    <>
-                      <div className="relative">
-                        <Users className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                        <select value={selectedUser} onChange={e => setSelectedUser(e.target.value)} className="input-premium pl-9 py-2 bg-transparent border-none w-[180px] cursor-pointer appearance-none">
-                          <option value="">All Developers</option>
-                          {usersList.map(u => <option key={u} value={u}>{u}</option>)}
-                        </select>
-                      </div>
-                      <div className="w-px h-6 bg-slate-200 dark:bg-zinc-800"></div>
-                    </>
-                  ) : null}
-                  
-                  <div className="relative">
-                    <Calendar className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <select value={dateFilter} onChange={e => setDateFilter(e.target.value)} className="input-premium pl-9 py-2 bg-transparent border-none w-[140px] cursor-pointer appearance-none">
-                      <option value="all">All Time</option>
-                      <option value="today">Today</option>
-                      <option value="yesterday">Yesterday</option>
-                      <option value="last7days">Last 7 Days</option>
-                    </select>
-                  </div>
+                  )}
                 </div>
 
-                <div className="flex items-center bg-slate-100 dark:bg-zinc-900/80 p-1 rounded-xl border border-slate-200 dark:border-zinc-800/80">
-                  <button onClick={() => setViewMode('card')} className={`p-1.5 rounded-lg transition-all ${viewMode === 'card' ? 'bg-white dark:bg-zinc-800 shadow-sm text-slate-800 dark:text-white' : 'text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300'}`}>
-                    <LayoutGrid className="w-4 h-4" />
-                  </button>
-                  <button onClick={() => setViewMode('table')} className={`p-1.5 rounded-lg transition-all ${viewMode === 'table' ? 'bg-white dark:bg-zinc-800 shadow-sm text-slate-800 dark:text-white' : 'text-slate-400 hover:text-slate-600 dark:hover:text-zinc-300'}`}>
-                    <List className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Activity Feed Container */}
-              <div className="min-h-[400px]">
-                {loading ? (
-                  <div className="space-y-4">
-                    {[1, 2, 3].map(i => <ActivitySkeleton key={i} />)}
-                  </div>
-                ) : activities.length === 0 ? (
-                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card p-16 text-center flex flex-col items-center justify-center">
-                    <div className="w-20 h-20 rounded-2xl bg-slate-100 dark:bg-zinc-800/50 flex items-center justify-center text-slate-400 dark:text-zinc-500 mb-6 rotate-3">
-                      <Search className="w-10 h-10" />
-                    </div>
-                    <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">No activities logged yet</h3>
-                    <p className="text-slate-500 dark:text-zinc-400 max-w-md mb-6">
-                      Sync is fully automatic. Push commits to your connected GitHub repositories to see updates in real time.
-                    </p>
-                    <button onClick={() => { setSelectedUser(''); setDateFilter('all'); }} className="btn-secondary">
-                      Reset Filters
-                    </button>
-                  </motion.div>
-                ) : viewMode === 'table' ? (
-                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass-card overflow-hidden border-slate-200/60 dark:border-zinc-800/60">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left border-collapse">
-                        <thead className="bg-slate-50/50 dark:bg-zinc-900/50 backdrop-blur-sm border-b border-slate-200 dark:border-zinc-800">
-                          <tr>
-                            <th className="px-4 py-3.5 text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">Employee</th>
-                            <th className="px-4 py-3.5 text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">Repository</th>
-                            <th className="px-4 py-3.5 text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">Activity</th>
-                            <th className="px-4 py-3.5 text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">Source</th>
-                            <th className="px-4 py-3.5 text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">Timestamp</th>
-                            <th className="px-4 py-3.5 text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider text-right">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 dark:divide-zinc-800/50">
-                          {activities.map(act => <ActivityTableRow key={act.id} act={act} onEdit={setEditTarget} onDelete={handleDelete} />)}
-                        </tbody>
-                      </table>
-                    </div>
-                  </motion.div>
-                ) : (
-                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    <AnimatePresence>
-                      {activities.map(act => <ActivityCard key={act.id} act={act} onEdit={setEditTarget} onDelete={handleDelete} />)}
-                    </AnimatePresence>
-                  </motion.div>
-                )}
-              </div>
-
-            </motion.div>
-          )}
+              </motion.div>
+            )}
+          </React.Suspense>
         </div>
       </main>
 
@@ -834,18 +972,24 @@ function AppRouting({ currentPath, navigate }) {
   useEffect(() => {
     if (currentPath.startsWith('/oauth-success')) return;
 
-    // If session is checked and user is not authenticated, force redirect to /login
     if (!loading && !user && currentPath !== '/login' && currentPath !== '/register') {
       navigate('/login');
     }
-    // If logged in and browsing login or register, redirect to home
     if (!loading && user && (currentPath === '/login' || currentPath === '/register')) {
       navigate('/');
     }
   }, [user, loading, currentPath]);
 
   if (currentPath.startsWith('/oauth-success')) {
-    return <OAuthSuccess navigate={navigate} />;
+    return (
+      <React.Suspense fallback={
+        <div className="min-h-screen bg-[#07090e] flex items-center justify-center">
+          <RefreshCw className="w-8 h-8 text-violet-500 animate-spin" />
+        </div>
+      }>
+        <OAuthSuccess navigate={navigate} />
+      </React.Suspense>
+    );
   }
 
   if (loading) {
@@ -861,15 +1005,31 @@ function AppRouting({ currentPath, navigate }) {
 
   if (!user) {
     if (currentPath === '/register') {
-      return <Register navigate={navigate} />;
+      return (
+        <React.Suspense fallback={
+          <div className="min-h-screen bg-[#07090e] flex items-center justify-center">
+            <RefreshCw className="w-8 h-8 text-violet-500 animate-spin" />
+          </div>
+        }>
+          <Register navigate={navigate} />
+        </React.Suspense>
+      );
     }
-    return <Login navigate={navigate} />;
+    return (
+      <React.Suspense fallback={
+        <div className="min-h-screen bg-[#07090e] flex items-center justify-center">
+          <RefreshCw className="w-8 h-8 text-violet-500 animate-spin" />
+        </div>
+      }>
+        <Login navigate={navigate} />
+      </React.Suspense>
+    );
   }
 
-  return <MainAppContent currentPath={currentPath} navigate={navigate} />;
+  return <MainAppContent />;
 }
 
-// ── Root Wrapper with Context ─────────────────────────────────────────
+// ── Root Wrapper with Error Boundary and Context (Step 21) ────────────
 
 export default function App() {
   const [currentPath, setCurrentPath] = useState(window.location.pathname);
@@ -888,9 +1048,11 @@ export default function App() {
   };
 
   return (
-    <AuthProvider>
-      <Toaster position="top-right" reverseOrder={false} />
-      <AppRouting currentPath={currentPath} navigate={navigate} />
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <Toaster position="top-right" reverseOrder={false} />
+        <AppRouting currentPath={currentPath} navigate={navigate} />
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
