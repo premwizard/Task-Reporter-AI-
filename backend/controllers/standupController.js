@@ -2,13 +2,30 @@ import { pool } from '../database/db.js';
 
 /**
  * Express controller to generate AI Daily, Weekly, or Monthly Standup updates using Groq
+ * SECURITY: Non-admin users can ONLY generate standups for THEMSELVES.
+ *           Admins can request any username including 'team'/'all'.
  */
 export const getAIStandup = async (req, res) => {
   const { username } = req.params;
   const { type = 'daily' } = req.query; // daily, weekly, monthly
+  const authUserId = req.user?.id;
+  const authUsername = req.user?.github_username;
+  const authRole = req.user?.role;
 
   try {
-    console.log(`🤖 [AI Standup] Request for user: "${username}" | Type: "${type}"`);
+    console.log(`🤖 [AI Standup] Request for user: "${username}" | Type: "${type}" | Requested by: "${authUsername}" (role: ${authRole})`);
+
+    const isTeam = username.toLowerCase() === 'team' || username.toLowerCase() === 'all';
+
+    // SECURITY CHECK: Non-admins cannot request team standups or other users' standups
+    if (authRole !== 'admin') {
+      if (isTeam) {
+        return res.status(403).json({ error: 'Access denied: Team standups require admin role.' });
+      }
+      if (username !== authUsername) {
+        return res.status(403).json({ error: 'Access denied: You can only generate standups for yourself.' });
+      }
+    }
 
     // Determine date thresholds
     let daysThreshold = 2; // For daily, check yesterday and today
@@ -18,46 +35,44 @@ export const getAIStandup = async (req, res) => {
     const sinceDate = new Date();
     sinceDate.setDate(sinceDate.getDate() - daysThreshold);
 
-    let userQuery = null;
-    let userId = null;
     let resolvedUsername = username;
 
-    const isTeam = username.toLowerCase() === 'team' || username.toLowerCase() === 'all';
-
-    // 1. Resolve user unless requesting team summaries
+    // 1. Resolve userId unless requesting team summaries
     if (!isTeam) {
-      userQuery = await pool.query(
-        `SELECT id, github_username, email FROM users WHERE github_username = $1 OR name = $1 OR id = $2 LIMIT 1`,
+      const userQuery = await pool.query(
+        `SELECT id, github_username FROM users WHERE github_username = $1 OR id = $2 LIMIT 1`,
         [username, isNaN(parseInt(username)) ? -999 : parseInt(username)]
       );
       if (userQuery.rows.length > 0) {
-        userId = userQuery.rows[0].id;
         resolvedUsername = userQuery.rows[0].github_username || username;
       }
     }
 
-    // 2. Fetch Commits
+    // 2. Fetch Commits — strict isolation
     let commitQueryStr = '';
     let commitQueryParams = [];
     if (isTeam) {
+      // Admin-only: fetch all activities
       commitQueryStr = `SELECT * FROM activities WHERE created_at >= $1 ORDER BY created_at DESC`;
       commitQueryParams = [sinceDate];
     } else {
+      // Filter strictly by both user_id AND employee_name for robustness
       commitQueryStr = `SELECT * FROM activities WHERE (user_id = $1 OR employee_name = $2) AND created_at >= $3 ORDER BY created_at DESC`;
-      commitQueryParams = [userId, resolvedUsername, sinceDate];
+      commitQueryParams = [authUserId, resolvedUsername, sinceDate];
     }
     const commitsRes = await pool.query(commitQueryStr, commitQueryParams);
     const commits = commitsRes.rows;
 
-    // 3. Fetch PRs
+    // 3. Fetch PRs — strict isolation
     let prQueryStr = '';
     let prQueryParams = [];
     if (isTeam) {
       prQueryStr = `SELECT * FROM pull_requests WHERE created_at >= $1 ORDER BY created_at DESC`;
       prQueryParams = [sinceDate];
     } else {
-      prQueryStr = `SELECT * FROM pull_requests WHERE author = $1 AND created_at >= $2 ORDER BY created_at DESC`;
-      prQueryParams = [resolvedUsername, sinceDate];
+      // Filter by user_id (new column) OR author username for backwards compatibility
+      prQueryStr = `SELECT * FROM pull_requests WHERE (user_id = $1 OR author = $2) AND created_at >= $3 ORDER BY created_at DESC`;
+      prQueryParams = [authUserId, resolvedUsername, sinceDate];
     }
     const prsRes = await pool.query(prQueryStr, prQueryParams);
     const prs = prsRes.rows;
@@ -73,8 +88,7 @@ export const getAIStandup = async (req, res) => {
         success: true,
         type,
         username: resolvedUsername,
-        standup: `### 📅 No Activity Identified
-No active code pushing or pull request activities recorded for **${resolvedUsername}** in the selected timeframe (${type}).`,
+        standup: `### 📅 No Activity Identified\nNo active code pushing or pull request activities recorded for **${resolvedUsername}** in the selected timeframe (${type}).`,
         stats: { commits: 0, prs: 0, repos: 0 }
       });
     }
@@ -161,7 +175,6 @@ ${prsText || 'No pull requests recorded.'}`;
 
 function generateMockStandup(username, commits, prs, type, repos, isTeam) {
   const period = type === 'daily' ? 'today' : type === 'weekly' ? 'this week' : 'this month';
-  const prevPeriod = type === 'daily' ? 'yesterday' : 'last week';
 
   const commitHighlights = commits.slice(0, 4).map(c => `* ${c.activity.replace(/^(feat|fix|docs|refactor|test|chore)(\(.*?\))?:/i, '').trim()} in \`${c.repository_name}\` branch \`${c.branch || 'main'}\``).join('\n');
   const prHighlights = prs.slice(0, 3).map(p => `* ${p.title} (${p.merged ? 'Merged' : 'Open'})`).join('\n');

@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import api from '../services/api';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  FolderGit2, Search, Check, AlertTriangle, Link2, 
-  Trash2, RefreshCw, CheckCircle2, ChevronRight,
-  Zap, Shield, Building2, User, ExternalLink, HelpCircle
+import {
+  FolderGit2, Search, RefreshCw, CheckCircle2,
+  Zap, Building2, User, ExternalLink, Trash2,
+  GitBranch, Lock, Globe, Check, AlertCircle
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -12,607 +12,490 @@ const ConnectRepos = () => {
   const [installations, setInstallations] = useState([]);
   const [repos, setRepos] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [statusLoading, setStatusLoading] = useState(true); // Step 10
-  const [installedStatus, setInstalledStatus] = useState(null); // Step 7
-  const [binding, setBinding] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterType, setFilterType] = useState('all'); // Tab filter for repositories
+  const [filterType, setFilterType] = useState('all');
   const [installUrl, setInstallUrl] = useState('');
   const [refreshingId, setRefreshingId] = useState(null);
-  const [disconnectingId, setDisconnectingId] = useState(null);
+  const [togglingRepo, setTogglingRepo] = useState(null);
 
-  // 1. Detect if returning from a fresh GitHub App installation
+  // Handle fresh GitHub App installation redirect (installation_id in URL)
   const handleUrlBinding = async () => {
     const params = new URLSearchParams(window.location.search);
     const installationId = params.get('installation_id');
     const setupAction = params.get('setup_action');
 
     if (installationId && (setupAction === 'install' || setupAction === 'request' || setupAction === 'update')) {
-      setBinding(true);
       const toastId = toast.loading('🔗 Finalizing GitHub App integration...');
       try {
-        console.log(`[ConnectRepos] Dynamic installation redirect caught. ID: ${installationId}`);
         await api.post('/github-app/bind', { installation_id: parseInt(installationId) });
-        
-        // Clean URL parameters gracefully
-        const cleanUrl = window.location.pathname;
-        window.history.replaceState({}, document.title, cleanUrl);
-        
+        window.history.replaceState({}, document.title, window.location.pathname);
         toast.success('GitHub App integrated successfully!', { id: toastId, duration: 4000 });
-        // Refresh data to reflect new installation and repositories
-        await fetchData(true);
       } catch (err) {
-        toast.error('Failed to link GitHub App: ' + err.message, { id: toastId, duration: 5000 });
-      } finally {
-        setBinding(false);
+        toast.error('Failed to link GitHub App: ' + err.message, { id: toastId });
       }
     }
   };
 
-  // 2. Fetch installations and connected repos
+  // Fetch installations + repos
   const fetchData = async (quiet = false) => {
-    if (!quiet) {
-      setLoading(true);
-      setStatusLoading(true);
-    }
+    if (!quiet) setLoading(true);
     try {
-      // Fetch installations list
-      const instData = await api.get('/github-app/installations');
-      setInstallations(instData);
-
-      // Fetch combined repositories across all installations
-      const reposData = await api.get('/github-app/repositories');
-      setRepos(reposData);
-
-      // Fetch pre-configured install URL
-      const urlData = await api.get('/github-app/install-url');
-      setInstallUrl(urlData.install_url);
-
-      // Fetch GitHub App status (Step 7)
-      const statusData = await api.get('/github-app/status');
-      setInstalledStatus(statusData);
+      const [instData, reposData, urlData] = await Promise.all([
+        api.get('/github-app/installations'),
+        api.get('/github-app/repositories'),
+        api.get('/github-app/install-url'),
+      ]);
+      setInstallations(instData || []);
+      setRepos(Array.isArray(reposData) ? reposData : []);
+      setInstallUrl(urlData?.install_url || '');
     } catch (err) {
       console.error('Failed to load GitHub integration data:', err);
-      toast.error('Error synchronizing integrations: ' + err.message);
+      if (!quiet) toast.error('Error loading repositories: ' + err.message);
     } finally {
       setLoading(false);
-      setStatusLoading(false);
     }
   };
 
   useEffect(() => {
-    const initialize = async () => {
+    const init = async () => {
       await handleUrlBinding();
       await fetchData();
     };
-    initialize();
+    init();
   }, []);
 
-  // Filter repos based on query and filter tab (Step 10 & 11)
+  // Filtered + split lists
   const filteredRepos = repos.filter(repo => {
-    const matchesSearch = 
-      repo.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      repo.owner.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      repo.account_login.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (repo.organization && repo.organization.toLowerCase().includes(searchQuery.toLowerCase()));
-
+    const q = searchQuery.toLowerCase();
+    const matchesSearch =
+      (repo.name || '').toLowerCase().includes(q) ||
+      (repo.owner || '').toLowerCase().includes(q) ||
+      (repo.full_name || '').toLowerCase().includes(q) ||
+      (repo.organization && repo.organization.toLowerCase().includes(q));
     if (!matchesSearch) return false;
-
-    if (filterType === 'personal') return !repo.organization;
-    if (filterType === 'organization') return !!repo.organization;
     if (filterType === 'private') return repo.private;
     if (filterType === 'public') return !repo.private;
-
+    if (filterType === 'personal') return !repo.organization;
+    if (filterType === 'organization') return !!repo.organization;
     return true;
   });
 
-  const filteredConnected = filteredRepos.filter(r => r.connected);
-  const filteredAvailable = filteredRepos.filter(r => !r.connected);
+  const connected = filteredRepos.filter(r => r.connected);
+  const available = filteredRepos.filter(r => !r.connected);
 
-  // Trigger cache refresh
-  const handleRefresh = async (instId, dbId) => {
-    setRefreshingId(dbId);
-    const toastId = toast.loading('🔄 Syncing repositories from GitHub...');
+  // Toggle tracking for individual repo
+  const handleToggleConnect = async (repo, shouldConnect) => {
+    const key = repo.full_name || repo.name;
+    setTogglingRepo(key);
+    const toastId = toast.loading(shouldConnect ? `Syncing ${repo.name}...` : `Disconnecting ${repo.name}...`);
     try {
-      const data = await api.post(`/github-app/installations/${dbId}/refresh`);
-      toast.success(`Sync complete! Loaded ${data.repositories?.length || 0} repositories.`, { id: toastId });
+      if (shouldConnect) {
+        await api.post('/github-app/repositories/connect', {
+          repository_name: repo.full_name,
+          repo_name: repo.name,
+        });
+        toast.success(`${repo.name} is now being tracked!`, { id: toastId });
+      } else {
+        await api.post('/github-app/repositories/disconnect', {
+          repository_name: repo.full_name,
+        });
+        toast.success(`${repo.name} disconnected.`, { id: toastId });
+      }
       await fetchData(true);
     } catch (err) {
-      toast.error('Failed to sync installation: ' + err.message, { id: toastId });
+      toast.error(`Failed: ${err.message}`, { id: toastId });
+    } finally {
+      setTogglingRepo(null);
+    }
+  };
+
+  // Refresh installation (re-sync from GitHub API)
+  const handleRefresh = async (inst) => {
+    setRefreshingId(inst.id);
+    const toastId = toast.loading('🔄 Syncing from GitHub...');
+    try {
+      const data = await api.post(`/github-app/installations/${inst.id}/refresh`);
+      toast.success(`Synced ${data.repositories?.length || 0} repositories.`, { id: toastId });
+      await fetchData(true);
+    } catch (err) {
+      toast.error('Sync failed: ' + err.message, { id: toastId });
     } finally {
       setRefreshingId(null);
     }
   };
 
-  // Remove/Disconnect integration
-  const handleDisconnect = async (dbId, accountLogin) => {
-    if (!window.confirm(`Are you sure you want to disconnect @${accountLogin}? This will disable push webhook tracking for all its repositories.`)) {
-      return;
-    }
+  const filterPills = [
+    { id: 'all', label: 'All' },
+    { id: 'personal', label: 'Personal' },
+    { id: 'organization', label: 'Organization' },
+    { id: 'private', label: 'Private' },
+    { id: 'public', label: 'Public' },
+  ];
 
-    setDisconnectingId(dbId);
-    const toastId = toast.loading(`Disconnecting @${accountLogin}...`);
-    try {
-      await api.delete(`/github-app/installations/${dbId}`);
-      toast.success(`Successfully disconnected @${accountLogin}.`, { id: toastId });
-      await fetchData(true);
-    } catch (err) {
-      toast.error('Failed to remove integration: ' + err.message, { id: toastId });
-    } finally {
-      setDisconnectingId(null);
-    }
+  // ── Repo Card ─────────────────────────────────────────────────────────
+  const RepoCard = ({ repo, isConnected }) => {
+    const key = repo.full_name || repo.name;
+    const isToggling = togglingRepo === key;
+
+    return (
+      <motion.div
+        layout
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.97 }}
+        className={`glass-card p-5 flex flex-col justify-between transition-all ${
+          isConnected
+            ? 'border-emerald-500/20 bg-emerald-500/[0.01]'
+            : 'border-slate-200/60 dark:border-zinc-800/60'
+        }`}
+      >
+        <div className="space-y-3">
+          {/* Repo name + status badge */}
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <FolderGit2 className={`w-4 h-4 flex-shrink-0 ${isConnected ? 'text-emerald-500' : 'text-slate-400 dark:text-zinc-500'}`} />
+              <h4
+                className="font-extrabold text-sm text-slate-900 dark:text-white truncate"
+                title={repo.full_name}
+              >
+                {repo.name}
+              </h4>
+            </div>
+            {isConnected ? (
+              <span className="flex-shrink-0 flex items-center gap-1 bg-emerald-500/10 text-emerald-500 text-[9px] font-extrabold px-2 py-0.5 rounded border border-emerald-500/20">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                Active
+              </span>
+            ) : (
+              <span className="flex-shrink-0 bg-slate-100 dark:bg-zinc-800 text-slate-400 dark:text-zinc-500 text-[9px] font-extrabold px-2 py-0.5 rounded border border-slate-200/50 dark:border-zinc-700/30">
+                Available
+              </span>
+            )}
+          </div>
+
+          {/* Full name + org */}
+          <p className="text-[10px] text-slate-400 dark:text-zinc-500 font-mono truncate">{repo.full_name}</p>
+
+          {/* Meta row */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {repo.organization && (
+              <span className="flex items-center gap-1 text-[10px] font-semibold text-violet-500 bg-violet-500/10 px-2 py-0.5 rounded border border-violet-500/20">
+                <Building2 className="w-3 h-3" /> {repo.organization}
+              </span>
+            )}
+            <span className={`flex items-center gap-1 text-[9px] font-extrabold uppercase px-2 py-0.5 rounded ${
+              repo.private
+                ? 'bg-rose-500/10 text-rose-500 border border-rose-500/20'
+                : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
+            }`}>
+              {repo.private ? <Lock className="w-2.5 h-2.5" /> : <Globe className="w-2.5 h-2.5" />}
+              {repo.private ? 'Private' : 'Public'}
+            </span>
+            {repo.owner && (
+              <span className="text-[10px] text-slate-400 dark:text-zinc-500">
+                @{repo.owner}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Footer action */}
+        <div className="mt-4 pt-3 border-t border-slate-100 dark:border-zinc-800/60 flex items-center justify-between">
+          {isConnected ? (
+            <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-500">
+              <CheckCircle2 className="w-3 h-3" /> Commits tracked
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 text-[10px] font-semibold text-slate-400 dark:text-zinc-500">
+              <GitBranch className="w-3 h-3" /> Not tracked
+            </span>
+          )}
+
+          <button
+            onClick={() => handleToggleConnect(repo, !isConnected)}
+            disabled={isToggling}
+            className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border transition-all cursor-pointer ${
+              isConnected
+                ? 'border-rose-500/30 text-rose-500 bg-rose-500/5 hover:bg-rose-500/10'
+                : 'border-violet-500/30 text-violet-500 bg-violet-500/5 hover:bg-violet-500/15'
+            } ${isToggling ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            {isToggling ? (
+              <RefreshCw className="w-3 h-3 animate-spin" />
+            ) : isConnected ? (
+              <Trash2 className="w-3 h-3" />
+            ) : (
+              <Zap className="w-3 h-3" />
+            )}
+            {isToggling ? 'Working...' : isConnected ? 'Disconnect' : 'Track Repo'}
+          </button>
+        </div>
+      </motion.div>
+    );
   };
 
-  // Sync / Track toggle handler for individual repositories (Step 9)
-  const handleToggleConnect = async (repo, shouldConnect) => {
-    const toastId = toast.loading(shouldConnect ? `Syncing repository ${repo.name}...` : `Disconnecting repository ${repo.name}...`);
-    try {
-      if (shouldConnect) {
-        await api.post('/github-app/repositories/connect', { 
-          repository_name: repo.full_name, 
-          repo_name: repo.name 
-        });
-        toast.success(`Repository ${repo.name} connected successfully!`, { id: toastId, duration: 3000 });
-      } else {
-        if (!window.confirm(`Are you sure you want to stop tracking commits for ${repo.name}?`)) {
-          toast.dismiss(toastId);
-          return;
-        }
-        await api.post('/github-app/repositories/disconnect', { 
-          repository_name: repo.full_name 
-        });
-        toast.success(`Repository ${repo.name} disconnected successfully.`, { id: toastId, duration: 3000 });
-      }
-      await fetchData(true);
-    } catch (err) {
-      toast.error(`Operation failed: ${err.message}`, { id: toastId, duration: 4000 });
-    }
-  };
+  // ── Loading skeleton ───────────────────────────────────────────────────
+  if (loading) {
+    return (
+      <div className="max-w-7xl mx-auto space-y-8">
+        <div className="flex items-center justify-between">
+          <div className="space-y-2">
+            <div className="h-8 w-56 bg-slate-200 dark:bg-zinc-800 rounded-lg animate-pulse" />
+            <div className="h-4 w-96 bg-slate-100 dark:bg-zinc-800/60 rounded animate-pulse" />
+          </div>
+          <div className="h-9 w-28 bg-slate-200 dark:bg-zinc-800 rounded-lg animate-pulse" />
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="glass-card p-5 space-y-3 animate-pulse">
+              <div className="h-4 w-3/4 bg-slate-200 dark:bg-zinc-800 rounded" />
+              <div className="h-3 w-full bg-slate-100 dark:bg-zinc-800/60 rounded" />
+              <div className="h-3 w-1/2 bg-slate-100 dark:bg-zinc-800/60 rounded" />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
+  // ── Main render ────────────────────────────────────────────────────────
   return (
     <div className="max-w-7xl mx-auto space-y-8 font-sans">
-      
-      {/* Header section */}
+
+      {/* ── Page Header ── */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">GitHub App Integration</h1>
+          <h1 className="text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight">
+            Repository Tracking
+          </h1>
           <p className="text-slate-500 dark:text-zinc-400 mt-1">
-            Connect personal and organization accounts using our centralized GitHub App.
+            Manage which repositories GitIntel monitors for commits and pull requests.
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <button 
-            onClick={() => fetchData()} 
-            disabled={loading || binding}
+
+        <div className="flex items-center gap-3 flex-shrink-0">
+          <button
+            onClick={() => fetchData()}
+            disabled={loading}
             className="btn-secondary flex items-center gap-2"
           >
-            <RefreshCw className={`w-4 h-4 ${(loading || binding) ? 'animate-spin' : ''}`} />
-            Sync Status
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
           </button>
-          
-          {installations.length > 0 && (
+
+          {installUrl && (
             <a
-              href={installUrl || '#'}
+              href={installUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="btn-primary flex items-center gap-2 shadow-lg shadow-violet-500/20"
             >
               <Building2 className="w-4 h-4" />
-              Add More Accounts
+              Add Account
             </a>
           )}
         </div>
       </div>
 
-      <AnimatePresence mode="wait">
-        {binding ? (
-          // Binding loading state
-          <motion.div 
-            initial={{ opacity: 0, y: 15 }} 
-            animate={{ opacity: 1, y: 0 }} 
-            exit={{ opacity: 0 }}
-            className="glass-card p-16 text-center flex flex-col items-center justify-center border-violet-500/30"
-          >
-            <div className="relative flex items-center justify-center w-20 h-20 mb-6">
-              <span className="absolute w-full h-full rounded-full bg-violet-500/10 animate-ping"></span>
-              <div className="relative w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center text-white shadow-xl shadow-violet-500/30">
-                <Link2 className="w-8 h-8 animate-pulse" />
-              </div>
+      {/* ── Stats Banner ── */}
+      {installations.length > 0 && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="glass-card p-4 flex items-center gap-3 border-emerald-500/20 bg-emerald-500/[0.01]">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/10 flex items-center justify-center">
+              <CheckCircle2 className="w-5 h-5 text-emerald-500" />
             </div>
-            <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">Finalizing Connection...</h3>
-            <p className="text-slate-500 dark:text-zinc-400 max-w-sm">
-              We are connecting your GitHub App installation and caching repository indexes. This will only take a second.
-            </p>
-          </motion.div>
-        ) : (statusLoading || loading) ? (
-          // General skeleton loading state (Step 10)
-          <motion.div 
-            initial={{ opacity: 0 }} 
-            animate={{ opacity: 1 }} 
-            exit={{ opacity: 0 }}
-            className="glass-card p-16 text-center flex flex-col items-center justify-center border-zinc-800"
-          >
-            <div className="flex flex-col items-center gap-4 animate-pulse">
-              <RefreshCw className="w-10 h-10 text-violet-500 animate-spin" />
-              <h3 className="text-xs font-bold text-zinc-450 uppercase tracking-widest">Checking GitHub installation...</h3>
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-zinc-400">Connected</p>
+              <p className="text-xl font-extrabold text-slate-900 dark:text-white">{repos.filter(r => r.connected).length}</p>
             </div>
-          </motion.div>
-        ) : (!installedStatus?.installed || installations.length === 0) ? (
-          // Step 8 & 9: Onboarding screen - Install App Button
-          <motion.div 
-            initial={{ opacity: 0, y: 15 }} 
-            animate={{ opacity: 1, y: 0 }}
-            className="glass-card p-8 md:p-16 text-center max-w-3xl mx-auto flex flex-col items-center justify-center border-slate-200/60 dark:border-zinc-800/60 relative overflow-hidden"
-          >
-            <div className="absolute top-0 right-0 w-64 h-64 bg-violet-600/5 rounded-full blur-3xl -mr-16 -mt-16"></div>
-            <div className="absolute bottom-0 left-0 w-64 h-64 bg-indigo-600/5 rounded-full blur-3xl -ml-16 -mb-16"></div>
+          </div>
 
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center text-white shadow-xl shadow-violet-500/30 mb-8">
-              <Shield className="w-8 h-8" />
+          <div className="glass-card p-4 flex items-center gap-3 border-slate-200/60 dark:border-zinc-800/60">
+            <div className="w-9 h-9 rounded-xl bg-slate-100 dark:bg-zinc-800 flex items-center justify-center">
+              <FolderGit2 className="w-5 h-5 text-slate-500 dark:text-zinc-400" />
             </div>
-
-            <h2 className="text-2xl md:text-3xl font-extrabold text-slate-900 dark:text-white tracking-tight mb-4">
-              Integrate with GitIntel App
-            </h2>
-            
-            <p className="text-slate-500 dark:text-zinc-400 text-base max-w-xl leading-relaxed mb-8">
-              GitIntel now utilizes the professional **GitHub App Integration** framework. This secures your credentials, allows organization repository access, includes collaborator repositories, and automates commit webhook flows without requiring administrator access!
-            </p>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 w-full max-w-2xl mb-10 text-left">
-              <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-900/50 border border-slate-200/50 dark:border-zinc-800/50">
-                <div className="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-500 flex items-center justify-center mb-3">
-                  <CheckCircle2 className="w-5 h-5" />
-                </div>
-                <h4 className="font-bold text-sm text-slate-900 dark:text-white mb-1">Easy Setup</h4>
-                <p className="text-xs text-slate-500 dark:text-zinc-400 leading-normal">One-click installation for personal or organization portfolios.</p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-900/50 border border-slate-200/50 dark:border-zinc-800/50">
-                <div className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-500 flex items-center justify-center mb-3">
-                  <Building2 className="w-5 h-5" />
-                </div>
-                <h4 className="font-bold text-sm text-slate-900 dark:text-white mb-1">Org & Private Repos</h4>
-                <p className="text-xs text-slate-500 dark:text-zinc-400 leading-normal">Seamlessly synchronize private repositories and team org workspaces.</p>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-900/50 border border-slate-200/50 dark:border-zinc-800/50">
-                <div className="w-8 h-8 rounded-lg bg-purple-500/10 text-purple-500 flex items-center justify-center mb-3">
-                  <Zap className="w-5 h-5" />
-                </div>
-                <h4 className="font-bold text-sm text-slate-900 dark:text-white mb-1">Central Webhooks</h4>
-                <p className="text-xs text-slate-500 dark:text-zinc-400 leading-normal">Push events register instantly across all repos. Zero per-repo configs.</p>
-              </div>
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-zinc-400">Total Repos</p>
+              <p className="text-xl font-extrabold text-slate-900 dark:text-white">{repos.length}</p>
             </div>
+          </div>
 
+          <div className="glass-card p-4 flex items-center gap-3 border-violet-500/20 bg-violet-500/[0.01]">
+            <div className="w-9 h-9 rounded-xl bg-violet-500/10 flex items-center justify-center">
+              <Building2 className="w-5 h-5 text-violet-500" />
+            </div>
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-zinc-400">Accounts</p>
+              <p className="text-xl font-extrabold text-slate-900 dark:text-white">{installations.length}</p>
+            </div>
+          </div>
+
+          <div className="glass-card p-4 flex items-center gap-3 border-amber-500/20 bg-amber-500/[0.01]">
+            <div className="w-9 h-9 rounded-xl bg-amber-500/10 flex items-center justify-center">
+              <Zap className="w-5 h-5 text-amber-500" />
+            </div>
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-zinc-400">Webhooks</p>
+              <p className="text-xl font-extrabold text-slate-900 dark:text-white">Live</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Accounts quick list ── */}
+      {installations.length > 0 && (
+        <div className="flex flex-wrap gap-3">
+          {installations.map(inst => (
+            <div
+              key={inst.id}
+              className="glass-card px-4 py-2.5 flex items-center gap-3 border-slate-200/60 dark:border-zinc-800/60"
+            >
+              <div className="w-7 h-7 rounded-lg bg-slate-100 dark:bg-zinc-800 flex items-center justify-center">
+                {inst.account_type === 'Organization'
+                  ? <Building2 className="w-4 h-4 text-violet-500" />
+                  : <User className="w-4 h-4 text-indigo-400" />}
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-900 dark:text-white">@{inst.account_login}</p>
+                <p className="text-[10px] text-slate-400 dark:text-zinc-500">
+                  {Array.isArray(inst.repositories) ? inst.repositories.length : 0} repos
+                </p>
+              </div>
+              <button
+                onClick={() => handleRefresh(inst)}
+                disabled={refreshingId === inst.id}
+                className="btn-icon border-transparent cursor-pointer"
+                title="Re-sync from GitHub"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${refreshingId === inst.id ? 'animate-spin' : ''}`} />
+              </button>
+              <a
+                href={installUrl || '#'}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-icon border-transparent text-slate-400 hover:text-violet-500"
+                title="Manage in GitHub"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── No installations at all ── */}
+      {installations.length === 0 && (
+        <div className="glass-card p-10 text-center flex flex-col items-center justify-center border-dashed border-slate-200 dark:border-zinc-700 max-w-2xl mx-auto">
+          <AlertCircle className="w-10 h-10 text-slate-400 dark:text-zinc-600 mb-3" />
+          <h3 className="text-base font-bold text-slate-800 dark:text-white mb-1">No GitHub Accounts Connected</h3>
+          <p className="text-sm text-slate-500 dark:text-zinc-400 mb-5 max-w-sm">
+            Install the GitIntel GitHub App on your account or organization to start tracking repositories.
+          </p>
+          {installUrl && (
             <a
-              href={installUrl || '#'}
+              href={installUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="px-8 py-4 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-750 hover:to-indigo-750 text-white rounded-xl text-base font-bold transition-all flex items-center gap-3 shadow-lg shadow-violet-600/30 group"
+              className="btn-primary flex items-center gap-2 shadow-lg shadow-violet-500/20"
             >
-              <Zap className="w-5 h-5 text-amber-300 fill-amber-300" />
-              Install GitIntel App
-              <ChevronRight className="w-5 h-5 transition-transform group-hover:translate-x-1" />
+              <Zap className="w-4 h-4" />
+              Install GitHub App
             </a>
+          )}
+        </div>
+      )}
 
-            <p className="text-zinc-500 dark:text-zinc-500 text-xs mt-6 flex items-center gap-1.5 justify-center">
-              <HelpCircle className="w-4 h-4 text-zinc-400" /> Need help? You can configure specific repository limits inside the installation menu.
-            </p>
-          </motion.div>
-        ) : (
-          // Active Integration UI
-          <motion.div 
-            initial={{ opacity: 0 }} 
-            animate={{ opacity: 1 }}
-            className="space-y-8"
-          >
-            {/* Step 17: Installation Status UI Banner */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="glass-card p-5 flex items-center gap-4 border-emerald-500/20 bg-emerald-500/[0.01]">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-500 flex items-center justify-center">
-                  <CheckCircle2 className="w-5.5 h-5.5" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-extrabold text-slate-900 dark:text-white">GitHub App Connected</h4>
-                  <p className="text-xs font-semibold text-slate-500 dark:text-zinc-400 mt-0.5">Central integration is active</p>
-                </div>
-              </div>
+      {/* ── Search + Filter ── */}
+      {repos.length > 0 && (
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+          <div className="relative flex-1 max-w-sm">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-zinc-500" />
+            <input
+              type="text"
+              placeholder="Search repositories..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="input-premium pl-9 w-full bg-slate-100/50 dark:bg-zinc-900/50"
+            />
+          </div>
 
-              <div className="glass-card p-5 flex items-center gap-4 border-blue-500/20 bg-blue-500/[0.01]">
-                <div className="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-500 flex items-center justify-center">
-                  <FolderGit2 className="w-5.5 h-5.5" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-extrabold text-slate-900 dark:text-white">{repos.length} Repositories Synced</h4>
-                  <p className="text-xs font-semibold text-slate-500 dark:text-zinc-400 mt-0.5">Caching active index entries</p>
-                </div>
-              </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            {filterPills.map(pill => (
+              <button
+                key={pill.id}
+                onClick={() => setFilterType(pill.id)}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
+                  filterType === pill.id
+                    ? 'bg-violet-500/10 text-violet-500 border-violet-500/30'
+                    : 'bg-transparent text-slate-500 dark:text-zinc-400 border-slate-200 dark:border-zinc-800 hover:border-violet-500/30'
+                }`}
+              >
+                {pill.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
-              <div className="glass-card p-5 flex items-center gap-4 border-violet-500/20 bg-violet-500/[0.01]">
-                <div className="w-10 h-10 rounded-xl bg-violet-500/10 text-violet-500 flex items-center justify-center">
-                  <Building2 className="w-5.5 h-5.5" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-extrabold text-slate-900 dark:text-white">{installations.length} Active Accounts</h4>
-                  <p className="text-xs font-semibold text-slate-500 dark:text-zinc-400 mt-0.5">Organizations & Teams linked</p>
-                </div>
-              </div>
+      {/* ── Connected Repositories ── */}
+      {repos.length > 0 && (
+        <div className="space-y-5">
+          <div className="flex items-center gap-2.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse flex-shrink-0" />
+            <h2 className="text-lg font-extrabold text-slate-900 dark:text-white">
+              Tracked Repositories
+              <span className="ml-2 text-sm font-bold text-slate-400 dark:text-zinc-500">({connected.length})</span>
+            </h2>
+          </div>
 
-              <div className="glass-card p-5 flex items-center gap-4 border-amber-500/20 bg-amber-500/[0.01]">
-                <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-500 flex items-center justify-center">
-                  <Zap className="w-5.5 h-5.5 text-amber-500 fill-amber-500/20" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-extrabold text-slate-900 dark:text-white">Webhook Pipeline Live</h4>
-                  <p className="text-xs font-semibold text-slate-500 dark:text-zinc-400 mt-0.5">Push events processed automatically</p>
-                </div>
-              </div>
+          {connected.length === 0 ? (
+            <div className="glass-card p-8 flex flex-col items-center justify-center text-center border-dashed border-slate-200 dark:border-zinc-700">
+              <FolderGit2 className="w-7 h-7 text-slate-400 dark:text-zinc-600 mb-2" />
+              <p className="text-sm text-slate-500 dark:text-zinc-400 font-semibold">
+                No repositories tracked yet. Click <span className="text-violet-500">Track Repo</span> below to start monitoring commits.
+              </p>
             </div>
-
-            {/* Installations Management Section */}
-            <div className="space-y-4">
-              <h2 className="text-xl font-bold text-slate-900 dark:text-white">Active App Integrations</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                {installations.map(inst => (
-                  <div 
-                    key={inst.id} 
-                    className="glass-card p-6 flex flex-col justify-between border-slate-200/60 dark:border-zinc-800/60 relative overflow-hidden"
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 rounded-xl bg-slate-100 dark:bg-zinc-800 flex items-center justify-center text-slate-700 dark:text-zinc-300 font-bold border border-slate-200/50 dark:border-zinc-700/50">
-                          {inst.account_type === 'Organization' ? (
-                            <Building2 className="w-6 h-6 text-violet-500" />
-                          ) : (
-                            <User className="w-6 h-6 text-indigo-500" />
-                          )}
-                        </div>
-                        <div>
-                          <h3 className="font-extrabold text-base text-slate-900 dark:text-white flex items-center gap-1.5">
-                            @{inst.account_login}
-                            <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-slate-100 text-slate-650 dark:bg-zinc-850 dark:text-zinc-450 border border-slate-200/30">
-                              {inst.account_type}
-                            </span>
-                          </h3>
-                          <p className="text-xs font-semibold text-slate-400 dark:text-zinc-500 mt-0.5">
-                            Connected on {new Date(inst.created_at).toLocaleDateString()} · Installation ID: {inst.installation_id}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => handleRefresh(inst.installation_id, inst.id)}
-                          disabled={refreshingId === inst.id || disconnectingId === inst.id}
-                          title="Sync connected repos"
-                          className="btn-icon cursor-pointer border-transparent"
-                        >
-                          <RefreshCw className={`w-4 h-4 ${(refreshingId === inst.id) ? 'animate-spin' : ''}`} />
-                        </button>
-                        <button
-                          onClick={() => handleDisconnect(inst.id, inst.account_login)}
-                          disabled={refreshingId === inst.id || disconnectingId === inst.id}
-                          title="Disconnect Integration"
-                          className="btn-icon hover:text-red-500 dark:hover:text-red-400 cursor-pointer border-transparent"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="border-t border-slate-100 dark:border-zinc-800/60 pt-4 mt-6 flex justify-between items-center text-xs">
-                      <span className="font-semibold text-slate-500 dark:text-zinc-400">
-                        {Array.isArray(inst.repositories) ? inst.repositories.length : 0} repositories loaded
-                      </span>
-                      
-                      <a
-                        href={installUrl || '#'}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-violet-600 dark:text-violet-400 hover:underline flex items-center gap-1 font-bold"
-                      >
-                        Manage in GitHub <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
-                    </div>
-                  </div>
+          ) : (
+            <AnimatePresence>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                {connected.map(repo => (
+                  <RepoCard key={`${repo.installation_id}-${repo.id || repo.name}`} repo={repo} isConnected={true} />
                 ))}
               </div>
+            </AnimatePresence>
+          )}
+        </div>
+      )}
+
+      {/* ── Available Repositories ── */}
+      {repos.length > 0 && (
+        <div className="space-y-5 pt-6 border-t border-slate-100 dark:border-zinc-800/60">
+          <div className="flex items-center gap-2.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-slate-300 dark:bg-zinc-600 flex-shrink-0" />
+            <h2 className="text-lg font-extrabold text-slate-900 dark:text-white">
+              Available Repositories
+              <span className="ml-2 text-sm font-bold text-slate-400 dark:text-zinc-500">({available.length})</span>
+            </h2>
+          </div>
+
+          {available.length === 0 ? (
+            <div className="glass-card p-8 flex flex-col items-center justify-center text-center">
+              <Check className="w-7 h-7 text-emerald-500 mb-2" />
+              <p className="text-sm text-slate-500 dark:text-zinc-400 font-semibold">
+                All repositories are currently being tracked!
+              </p>
             </div>
-
-            {/* Repositories Management Grid */}
-            <div className="space-y-6">
-              {/* Header with Search and Filters */}
-              <div className="flex flex-col gap-4">
-                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                  <div>
-                    <h2 className="text-xl font-bold text-slate-900 dark:text-white">Repository Tracking</h2>
-                    <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">
-                      Manage repositories tracked by GitIntel. Connect available workspaces to track commit summaries and daily analytics.
-                    </p>
-                  </div>
-                  
-                  <div className="relative w-full sm:max-w-xs">
-                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-zinc-500" />
-                    <input 
-                      type="text" 
-                      placeholder="Search repositories..." 
-                      value={searchQuery}
-                      onChange={e => setSearchQuery(e.target.value)}
-                      className="input-premium pl-9 w-full bg-slate-100/50 dark:bg-zinc-900/50"
-                    />
-                  </div>
-                </div>
-
-                {/* Filter pills */}
-                <div className="flex flex-wrap gap-2">
-                  {[
-                    { id: 'all', label: 'All Repositories' },
-                    { id: 'personal', label: 'Personal Workspaces' },
-                    { id: 'organization', label: 'Organization Workspaces' },
-                    { id: 'private', label: 'Private Repos' },
-                    { id: 'public', label: 'Public Repos' }
-                  ].map(tab => (
-                    <button
-                      key={tab.id}
-                      onClick={() => setFilterType(tab.id)}
-                      className={`px-3 py-1 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
-                        filterType === tab.id
-                          ? 'bg-violet-500/10 text-violet-500 border-violet-500/30'
-                          : 'bg-transparent text-slate-500 dark:text-zinc-400 border-slate-200 dark:border-zinc-800 hover:border-slate-350'
-                      }`}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
+          ) : (
+            <AnimatePresence>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                {available.map(repo => (
+                  <RepoCard key={`${repo.installation_id}-${repo.id || repo.name}`} repo={repo} isConnected={false} />
+                ))}
               </div>
-
-              {/* Connected Repositories Section */}
-              <div className="space-y-4 pt-4 border-t border-slate-100 dark:border-zinc-800/60">
-                <div className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                    Connected Workspaces ({filteredConnected.length})
-                  </h3>
-                </div>
-
-                {filteredConnected.length === 0 ? (
-                  <div className="glass-card p-8 text-center flex flex-col items-center justify-center border-dashed border-slate-200 dark:border-zinc-800">
-                    <FolderGit2 className="w-8 h-8 text-slate-400 dark:text-zinc-650 mb-2" />
-                    <p className="text-xs font-semibold text-slate-500 dark:text-zinc-400">No active tracking for matched workspaces. Connect repos from the list below to enable summaries.</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                    {filteredConnected.map(repo => (
-                      <div 
-                        key={`${repo.installation_id}-${repo.id}`}
-                        className="glass-card p-5 flex flex-col justify-between border-emerald-500/20 bg-emerald-500/[0.01]"
-                      >
-                        <div className="space-y-3">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <FolderGit2 className="w-4.5 h-4.5 text-emerald-500 flex-shrink-0" />
-                              <h4 className="font-extrabold text-sm text-slate-900 dark:text-white truncate" title={repo.full_name}>
-                                {repo.name}
-                              </h4>
-                            </div>
-                            <span className="bg-emerald-500/10 text-emerald-500 text-[9px] font-extrabold px-2 py-0.5 rounded border border-emerald-500/20 flex items-center gap-1">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Active
-                            </span>
-                          </div>
-
-                          <div className="flex items-center gap-2 text-[10px] font-semibold text-slate-500 dark:text-zinc-400">
-                            <span className="bg-slate-100 dark:bg-zinc-850 px-2 py-0.5 rounded border border-slate-200/50 dark:border-zinc-800">
-                              owner: @{repo.owner}
-                            </span>
-                            {repo.organization && (
-                              <>
-                                <span className="text-slate-300 dark:text-zinc-700">|</span>
-                                <span className="flex items-center gap-1">
-                                  <Building2 className="w-3 h-3 text-violet-400" /> {repo.organization}
-                                </span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="border-t border-slate-100 dark:border-zinc-800/60 pt-3 mt-4 flex items-center justify-between">
-                          <span className={`text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded ${
-                            repo.private 
-                              ? 'bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-400 border border-rose-200/20' 
-                              : 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-400 border border-indigo-200/20'
-                          }`}>
-                            {repo.private ? 'Private' : 'Public'}
-                          </span>
-
-                          <button
-                            onClick={() => handleToggleConnect(repo, false)}
-                            className="text-xs font-bold text-rose-500 hover:text-rose-600 dark:hover:text-rose-400 flex items-center gap-1 cursor-pointer border-transparent cursor-pointer bg-transparent"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" /> Disconnect
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Available Repositories Section */}
-              <div className="space-y-4 pt-6 border-t border-slate-100 dark:border-zinc-800/60">
-                <div className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-slate-400 dark:bg-zinc-650"></span>
-                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                    Available Workspaces ({filteredAvailable.length})
-                  </h3>
-                </div>
-
-                {filteredAvailable.length === 0 ? (
-                  <div className="glass-card p-8 text-center flex flex-col items-center justify-center">
-                    <Check className="w-8 h-8 text-emerald-500 mb-2" />
-                    <p className="text-xs font-semibold text-slate-500 dark:text-zinc-400">All available workspaces connected successfully.</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                    {filteredAvailable.map(repo => (
-                      <div 
-                        key={`${repo.installation_id}-${repo.id}`}
-                        className="glass-card p-5 flex flex-col justify-between border-slate-200 dark:border-zinc-800/60"
-                      >
-                        <div className="space-y-3">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 min-w-0">
-                              <FolderGit2 className="w-4.5 h-4.5 text-slate-400 dark:text-zinc-500 flex-shrink-0" />
-                              <h4 className="font-extrabold text-sm text-slate-900 dark:text-white truncate" title={repo.full_name}>
-                                {repo.name}
-                              </h4>
-                            </div>
-                            <span className="bg-slate-100 text-slate-500 dark:bg-zinc-800 dark:text-zinc-400 text-[9px] font-extrabold px-2 py-0.5 rounded border border-slate-200/50 dark:border-zinc-700/30">
-                              Available
-                            </span>
-                          </div>
-
-                          <div className="flex items-center gap-2 text-[10px] font-semibold text-slate-500 dark:text-zinc-400">
-                            <span className="bg-slate-100 dark:bg-zinc-850 px-2 py-0.5 rounded border border-slate-200/50 dark:border-zinc-800">
-                              owner: @{repo.owner}
-                            </span>
-                            {repo.organization && (
-                              <>
-                                <span className="text-slate-300 dark:text-zinc-700">|</span>
-                                <span className="flex items-center gap-1">
-                                  <Building2 className="w-3 h-3 text-violet-400" /> {repo.organization}
-                                </span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="border-t border-slate-105/30 dark:border-zinc-805/30 pt-3 mt-4 flex items-center justify-between">
-                          <span className={`text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded ${
-                            repo.private 
-                              ? 'bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-400 border border-rose-200/20' 
-                              : 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-400 border border-indigo-200/20'
-                          }`}>
-                            {repo.private ? 'Private' : 'Public'}
-                          </span>
-
-                          <button
-                            onClick={() => handleToggleConnect(repo, true)}
-                            className="text-xs font-bold text-violet-600 hover:text-violet-750 dark:text-violet-400 dark:hover:text-violet-300 flex items-center gap-1 cursor-pointer border-transparent bg-transparent"
-                          >
-                            <Zap className="w-3.5 h-3.5 fill-violet-500/10" /> Sync Repo
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            </AnimatePresence>
+          )}
+        </div>
+      )}
     </div>
   );
 };

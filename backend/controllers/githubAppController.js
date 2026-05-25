@@ -187,24 +187,40 @@ async function processPullRequestPayload(payload) {
   console.log(`==================================================`);
 
   try {
+    // Resolve user_id from the PR author's GitHub username for ownership tracking
+    let authorUserId = null;
+    try {
+      const userLookup = await pool.query(
+        `SELECT id FROM users WHERE github_username = $1 LIMIT 1`,
+        [author]
+      );
+      if (userLookup.rows.length > 0) {
+        authorUserId = userLookup.rows[0].id;
+        console.log(`👤 [PR Author Resolved] author=${author} → user_id=${authorUserId}`);
+      }
+    } catch (lookupErr) {
+      console.warn(`⚠️ [PR Author Lookup] Could not resolve user_id for author ${author}: ${lookupErr.message}`);
+    }
+
     const query = `
       INSERT INTO pull_requests 
-        (github_pr_id, repository_name, title, description, author, state, merged, branch, additions, deletions, changed_files, pr_url, created_at, merged_at, updated_at)
+        (github_pr_id, repository_name, title, description, author, user_id, state, merged, branch, additions, deletions, changed_files, pr_url, created_at, merged_at, updated_at)
       VALUES 
-        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, CURRENT_TIMESTAMP)
       ON CONFLICT (github_pr_id) DO UPDATE SET
         repository_name = $2,
         title = $3,
         description = $4,
         author = $5,
-        state = $6,
-        merged = $7,
-        branch = $8,
-        additions = $9,
-        deletions = $10,
-        changed_files = $11,
-        pr_url = $12,
-        merged_at = $14,
+        user_id = COALESCE(pull_requests.user_id, $6),
+        state = $7,
+        merged = $8,
+        branch = $9,
+        additions = $10,
+        deletions = $11,
+        changed_files = $12,
+        pr_url = $13,
+        merged_at = $15,
         updated_at = CURRENT_TIMESTAMP
       RETURNING *
     `;
@@ -214,6 +230,7 @@ async function processPullRequestPayload(payload) {
       title,
       description,
       author,
+      authorUserId,
       state,
       merged,
       branch,
@@ -617,7 +634,6 @@ export const getPRSummary = async (req, res) => {
       return res.status(403).json({ error: 'Access denied: You do not own this pull request.' });
     }
 
-    const pr = result.rows[0];
     const { generatePRSummary } = await import('../services/aiService.js');
     const summaryData = await generatePRSummary(pr);
 

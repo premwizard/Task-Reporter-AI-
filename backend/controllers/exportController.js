@@ -39,17 +39,24 @@ const parseFilters = (query) => {
     return { employee: employee || null, startDate, endDate, repository: repository || null, source: source || null };
 };
 
-// Helper to retrieve filtered Pull Requests
-const getFilteredPRs = async (employee, startDate, endDate, repository) => {
+// Helper to retrieve filtered Pull Requests — scoped by authenticated user
+const getFilteredPRs = async (userId, userRole, authorUsername, startDate, endDate, repository) => {
     let prQuery = `SELECT * FROM pull_requests WHERE 1=1`;
     let prParams = [];
     let paramCount = 1;
 
-    if (employee) {
+    // SECURITY: Non-admins only see their own PRs (by user_id OR author match)
+    if (userRole !== 'admin') {
+        prQuery += ` AND (user_id = $${paramCount} OR author = $${paramCount + 1})`;
+        prParams.push(userId, authorUsername);
+        paramCount += 2;
+    } else if (authorUsername) {
+        // Admin can filter by specific author
         prQuery += ` AND author = $${paramCount}`;
-        prParams.push(employee);
+        prParams.push(authorUsername);
         paramCount++;
     }
+
     if (startDate) {
         prQuery += ` AND created_at >= $${paramCount}`;
         prParams.push(startDate);
@@ -78,7 +85,7 @@ export const exportCSV = async (req, res) => {
         const { employee, startDate, endDate, repository, source } = parseFilters(req.query);
         
         const activities = await getFilteredActivities(req.user.id, req.user.role, employee, startDate, endDate, repository, source);
-        const prs = await getFilteredPRs(employee, startDate, endDate, repository);
+        const prs = await getFilteredPRs(req.user.id, req.user.role, req.user.github_username, startDate, endDate, repository);
 
         // Build composite CSV sections
         let csvOutput = '';
@@ -139,7 +146,7 @@ export const exportExcel = async (req, res) => {
         const { employee, startDate, endDate, repository, source } = parseFilters(req.query);
         
         const activities = await getFilteredActivities(req.user.id, req.user.role, employee, startDate, endDate, repository, source);
-        const prs = await getFilteredPRs(employee, startDate, endDate, repository);
+        const prs = await getFilteredPRs(req.user.id, req.user.role, req.user.github_username, startDate, endDate, repository);
 
         const workbook = xlsx.utils.book_new();
 
@@ -209,7 +216,7 @@ export const exportPDF = async (req, res) => {
         const { employee, startDate, endDate, repository, source } = parseFilters(req.query);
         
         const activities = await getFilteredActivities(req.user.id, req.user.role, employee, startDate, endDate, repository, source);
-        const prs = await getFilteredPRs(employee, startDate, endDate, repository);
+        const prs = await getFilteredPRs(req.user.id, req.user.role, req.user.github_username, startDate, endDate, repository);
 
         const doc = new PDFDocument({ margin: 40, size: 'A4' });
         
