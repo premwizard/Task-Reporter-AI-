@@ -153,6 +153,89 @@ async function processPushPayload(payload) {
 }
 
 /**
+ * Processes incoming webhook pull request payloads.
+ */
+async function processPullRequestPayload(payload) {
+  const pr = payload.pull_request;
+  const repository = payload.repository;
+  const repoFullName = repository?.full_name || 'unknown-repo';
+  
+  if (!pr) return;
+
+  const githubPrId = pr.id;
+  const title = pr.title || 'Untitled Pull Request';
+  const description = pr.body || '';
+  const author = pr.user?.login || 'unknown';
+  const state = pr.state || 'open';
+  const merged = !!pr.merged;
+  const branch = pr.head?.ref || 'main';
+  const additions = pr.additions || 0;
+  const deletions = pr.deletions || 0;
+  const changedFiles = pr.changed_files || 0;
+  const prUrl = pr.html_url || '';
+  const createdAt = pr.created_at ? new Date(pr.created_at) : new Date();
+  const mergedAt = pr.merged_at ? new Date(pr.merged_at) : null;
+
+  console.log(`\n==================================================`);
+  console.log(`🚀 [GitHub App Webhook] Pull Request Payload`);
+  console.log(`==================================================`);
+  console.log(`PR ID     : ${githubPrId}`);
+  console.log(`Title     : ${title}`);
+  console.log(`Author    : ${author}`);
+  console.log(`State     : ${state} (Merged: ${merged})`);
+  console.log(`Repo      : ${repoFullName}`);
+  console.log(`==================================================`);
+
+  try {
+    const query = `
+      INSERT INTO pull_requests 
+        (github_pr_id, repository_name, title, description, author, state, merged, branch, additions, deletions, changed_files, pr_url, created_at, merged_at, updated_at)
+      VALUES 
+        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CURRENT_TIMESTAMP)
+      ON CONFLICT (github_pr_id) DO UPDATE SET
+        repository_name = $2,
+        title = $3,
+        description = $4,
+        author = $5,
+        state = $6,
+        merged = $7,
+        branch = $8,
+        additions = $9,
+        deletions = $10,
+        changed_files = $11,
+        pr_url = $12,
+        merged_at = $14,
+        updated_at = CURRENT_TIMESTAMP
+      RETURNING *
+    `;
+    const result = await pool.query(query, [
+      githubPrId,
+      repoFullName,
+      title,
+      description,
+      author,
+      state,
+      merged,
+      branch,
+      additions,
+      deletions,
+      changedFiles,
+      prUrl,
+      createdAt,
+      mergedAt
+    ]);
+
+    if (result.rows.length > 0) {
+      const savedPR = result.rows[0];
+      console.log(`💾 [DB Success] Saved/Updated Pull Request ID: ${savedPR.id}`);
+      getIO().emit('new_pull_request', savedPR);
+    }
+  } catch (err) {
+    console.error('❌ [DB Error] Failed to save pull request:', err.message);
+  }
+}
+
+/**
  * Express handler for POST /api/github-app/webhook
  */
 export const handleGithubAppWebhook = async (req, res) => {
@@ -175,6 +258,9 @@ export const handleGithubAppWebhook = async (req, res) => {
     if (githubEvent === 'push') {
       await processPushPayload(payload);
     } 
+    else if (githubEvent === 'pull_request') {
+      await processPullRequestPayload(payload);
+    }
     else if (githubEvent === 'installation' || githubEvent === 'installation_repositories') {
       const action = payload.action;
       const instId = payload.installation.id;
@@ -386,3 +472,190 @@ export const removeIntegration = async (req, res) => {
     res.status(500).json({ error: 'Failed to remove integration: ' + err.message });
   }
 };
+
+/**
+ * Express handler for GET /api/pull-requests
+ */
+export const getPullRequests = async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT * FROM pull_requests ORDER BY created_at DESC`
+    );
+    res.status(200).json(result.rows);
+  } catch (err) {
+    console.error('Error fetching PRs:', err);
+    res.status(500).json({ error: 'Failed to fetch pull requests: ' + err.message });
+  }
+};
+
+/**
+ * Express handler for GET /api/pull-requests/:id
+ */
+export const getPullRequestById = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT * FROM pull_requests WHERE id = $1`,
+      [id]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Pull request not found.' });
+    }
+    res.status(200).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error fetching PR by ID:', err);
+    res.status(500).json({ error: 'Failed to fetch pull request: ' + err.message });
+  }
+};
+
+/**
+ * Express handler for GET /api/pull-requests/user/:username
+ */
+export const getPullRequestsByUsername = async (req, res) => {
+  const { username } = req.params;
+  try {
+    const result = await pool.query(
+      `SELECT * FROM pull_requests WHERE author = $1 ORDER BY created_at DESC`,
+      [username]
+    );
+    res.status(200).json(result.rows);
+  } catch (err) {
+    console.error('Error fetching PR by username:', err);
+    res.status(500).json({ error: 'Failed to fetch pull requests for user: ' + err.message });
+  }
+};
+
+/**
+ * Express handler for POST /api/pull-requests/:id/ai-summary
+ */
+export const getPRSummary = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await pool.query(`SELECT * FROM pull_requests WHERE id = $1`, [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Pull request not found.' });
+    }
+
+    const pr = result.rows[0];
+    const { generatePRSummary } = await import('../services/aiService.js');
+    const summaryData = await generatePRSummary(pr);
+
+    res.status(200).json(summaryData);
+  } catch (err) {
+    console.error('Error generating AI PR summary:', err);
+    res.status(500).json({ error: 'Failed to generate PR summary: ' + err.message });
+  }
+};
+
+/**
+ * Express handler for GET /api/github-app/installation-status
+ */
+export const getInstallationStatus = async (req, res) => {
+  const userId = req.user?.id;
+  const username = req.user?.github_username;
+
+  console.log(`🔍 [Installation Check] Verifying status for user_id ${userId} (@${username})`);
+
+  try {
+    // 1. Check local database first
+    const dbQuery = await pool.query(
+      `SELECT * FROM github_installations WHERE user_id = $1 OR account_login = $2 ORDER BY created_at DESC LIMIT 1`,
+      [userId, username]
+    );
+
+    if (dbQuery.rows.length > 0) {
+      const inst = dbQuery.rows[0];
+      console.log(`✅ [Installation Check] Found DB record. Inst ID: ${inst.installation_id}`);
+      return res.status(200).json({
+        installed: true,
+        installationId: parseInt(inst.installation_id),
+        account: inst.account_login
+      });
+    }
+
+    // 2. If not in DB, check GitHub API /user/installations using their oauth token
+    const userQuery = await pool.query(`SELECT github_access_token FROM users WHERE id = $1`, [userId]);
+    const oauthToken = userQuery.rows[0]?.github_access_token;
+
+    if (oauthToken) {
+      try {
+        const { Octokit } = await import('@octokit/rest');
+        const octokit = new Octokit({ auth: oauthToken });
+        const { data: installationsData } = await octokit.apps.listInstallationsForAuthenticatedUser();
+        const installations = installationsData.installations || [];
+
+        // Find installation for our specific app slug/id
+        const targetSlug = (process.env.GITHUB_APP_NAME || 'task-reporter-ai').toLowerCase().replace(/\s+/g, '-');
+        const appInstallation = installations.find(inst => inst.app_slug === targetSlug || inst.app_id === parseInt(process.env.GITHUB_APP_ID));
+
+        if (appInstallation) {
+          console.log(`💡 [App Discovery] Found active installation ${appInstallation.id} on GitHub. Syncing...`);
+          
+          const accountLogin = appInstallation.account.login;
+          const accountType = appInstallation.account.type;
+
+          // Fetch repositories accessible
+          const appOctokit = await githubApp.getInstallationOctokit(appInstallation.id);
+          const { data: reposData } = await appOctokit.apps.listReposAccessibleToInstallation();
+          const repositories = reposData.repositories || [];
+
+          const insertQuery = `
+            INSERT INTO github_installations (user_id, installation_id, account_login, account_type, repositories, github_username, installed_at)
+            VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+            ON CONFLICT (installation_id)
+            DO UPDATE SET user_id = $1, account_login = $3, account_type = $4, repositories = $5, github_username = $6, installed_at = CURRENT_TIMESTAMP
+            RETURNING *
+          `;
+          await pool.query(insertQuery, [userId, appInstallation.id, accountLogin, accountType, JSON.stringify(repositories), username]);
+
+          // Auto-sync repositories to connected_repositories
+          if (repositories.length > 0) {
+            console.log(`🔄 [Auto-sync Repos] Inserting ${repositories.length} repositories for user_id ${userId}...`);
+            for (const repo of repositories) {
+              await pool.query(
+                `INSERT INTO connected_repositories (user_id, repository_name, repo_name, status)
+                 VALUES ($1, $2, $3, 'active')
+                 ON CONFLICT (user_id, repository_name) DO NOTHING`,
+                [userId, repo.full_name, repo.name]
+              );
+            }
+          }
+
+          return res.status(200).json({
+            installed: true,
+            installationId: appInstallation.id,
+            account: accountLogin
+          });
+        }
+      } catch (ghErr) {
+        console.warn(`⚠️ [Installation Status Check GitHub Error] Could not query installations from GitHub: ${ghErr.message}`);
+      }
+    }
+
+    console.log(`❌ [Installation Check] No installations found for @${username}`);
+    return res.status(200).json({
+      installed: false,
+      installationId: null,
+      account: null
+    });
+  } catch (err) {
+    console.error('❌ [Installation Status Check Error]', err.message);
+    res.status(500).json({ error: 'Failed to retrieve installation status: ' + err.message });
+  }
+};
+
+/**
+ * Express handler for GET /api/github-app/setup
+ */
+export const handleSetupRedirect = async (req, res) => {
+  const { installation_id, setup_action } = req.query;
+  console.log(`🔧 [GitHub App Setup] Received redirect. ID: ${installation_id}, Action: ${setup_action}`);
+
+  const isProduction = process.env.NODE_ENV === 'production' || (req.headers.host && !req.headers.host.includes('localhost'));
+  const frontendUrl = isProduction ? 'https://task-reporter-ai.vercel.app' : 'http://localhost:3000';
+
+  // Redirect client directly back to frontend onboarding landing
+  res.redirect(`${frontendUrl}/install-success?installation_id=${installation_id}`);
+};
+
+

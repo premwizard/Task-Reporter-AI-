@@ -6,7 +6,9 @@ import {
   getConnectedRepositories,
   getUserInstallations,
   refreshInstallation,
-  removeIntegration
+  removeIntegration,
+  getInstallationStatus,
+  handleSetupRedirect
 } from '../controllers/githubAppController.js';
 
 const router = express.Router();
@@ -18,6 +20,8 @@ router.post('/webhook', (req, res, next) => {
 }, handleGithubAppWebhook);
 
 // Authenticated management endpoints
+router.get('/installation-status', authenticateToken, getInstallationStatus);
+router.get('/setup', handleSetupRedirect); // GitHub redirects here after install
 router.post('/bind', authenticateToken, bindInstallation);
 router.get('/repositories', authenticateToken, getConnectedRepositories);
 router.get('/installations', authenticateToken, getUserInstallations);

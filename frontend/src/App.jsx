@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import { motion, AnimatePresence } from 'framer-motion';
+import axios from 'axios';
 import { 
   Activity, Users, FolderGit2, Calendar, Download, 
   Moon, Sun, LayoutDashboard, LogOut, FileText,
   Github, Edit3, Trash2, X, RefreshCw, Search,
   Sparkles, Copy, CheckCircle, ChevronDown, Bot,
   LayoutGrid, List, MessageSquare, Bell, UserCircle, Menu,
-  FileSpreadsheet, Link2, Key
+  FileSpreadsheet, Link2, Key, GitPullRequest
 } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import api from './services/api';
@@ -22,6 +23,9 @@ const WhatsAppSetup = React.lazy(() => import('./pages/WhatsAppSetup'));
 const AIReports = React.lazy(() => import('./pages/AIReports'));
 const WebhookMonitor = React.lazy(() => import('./pages/WebhookMonitor'));
 const OAuthSuccess = React.lazy(() => import('./pages/OAuthSuccess'));
+const PullRequests = React.lazy(() => import('./pages/PullRequests'));
+const AIStandups = React.lazy(() => import('./pages/AIStandups'));
+const InstallSuccess = React.lazy(() => import('./pages/InstallSuccess'));
 
 const SOCKET_URL = getBackendBaseUrl();
 
@@ -549,16 +553,49 @@ function MainAppContent() {
     }
   }, []);
 
-  const handleExport = (type) => {
+  const handleExport = async (type) => {
     setExportOpen(false);
-    const params = {};
-    if (selectedUser) params.employee = selectedUser;
-    if (dateFilter && dateFilter !== 'all') params.filter = dateFilter;
-    
-    const qs = new URLSearchParams(params).toString();
-    const backendBase = `${getBackendBaseUrl()}/api`;
-    
-    window.open(`${backendBase}/export/${type}?${qs}`, '_blank');
+    const toastId = toast.loading('Generating engineering report...');
+    try {
+      const params = {};
+      if (selectedUser) params.employee = selectedUser;
+      if (dateFilter && dateFilter !== 'all') params.filter = dateFilter;
+      
+      const token = localStorage.getItem('token');
+      const backendUrl = `${getBackendBaseUrl()}/api/export/${type}`;
+      
+      const res = await axios.get(backendUrl, {
+        params,
+        headers: {
+          Authorization: token ? `Bearer ${token}` : undefined
+        },
+        responseType: 'blob'
+      });
+      
+      const mimes = {
+        csv: 'text/csv',
+        excel: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        pdf: 'application/pdf'
+      };
+      
+      const extension = type === 'excel' ? 'xlsx' : type;
+      const blob = new Blob([res.data], { type: mimes[type] || 'application/octet-stream' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `gitintel_report_${selectedUser || 'all'}_${dateFilter}.${extension}`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      
+      toast.dismiss(toastId);
+      toast.success('Report downloaded successfully!');
+    } catch (err) {
+      toast.dismiss(toastId);
+      console.error('Export failed:', err);
+      toast.error('Failed to export report: ' + err.message);
+    }
   };
 
   const handleGenerateGlobalSummary = async () => {
@@ -623,6 +660,8 @@ function MainAppContent() {
         
         <div className="flex-1 overflow-y-auto py-6 px-3 space-y-1.5">
           <SidebarItem id="dashboard" icon={LayoutDashboard} label="Dashboard" />
+          <SidebarItem id="pull-requests" icon={GitPullRequest} label="Pull Requests" />
+          <SidebarItem id="ai-standups" icon={Bot} label="AI Standups" />
           <SidebarItem id="connect-repos" icon={Link2} label="Connect Repos" />
           <SidebarItem id="analytics" icon={Sparkles} label="AI Insights" />
           <SidebarItem id="webhook-debug" icon={Bell} label="Webhook Monitor" />
@@ -711,6 +750,8 @@ function MainAppContent() {
             {activeTab === 'analytics' && <AIReports />}
             {activeTab === 'connect-repos' && <ConnectRepos />}
             {activeTab === 'webhook-debug' && <WebhookMonitor />}
+            {activeTab === 'pull-requests' && <PullRequests />}
+            {activeTab === 'ai-standups' && <AIStandups />}
             {activeTab === 'dashboard' && (
               <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-7xl mx-auto space-y-6">
                 
@@ -970,7 +1011,7 @@ function AppRouting({ currentPath, navigate }) {
   const { user, loading } = useAuth();
 
   useEffect(() => {
-    if (currentPath.startsWith('/oauth-success')) return;
+    if (currentPath.startsWith('/oauth-success') || currentPath.startsWith('/install-success')) return;
 
     if (!loading && !user && currentPath !== '/login' && currentPath !== '/register') {
       navigate('/login');
@@ -988,6 +1029,18 @@ function AppRouting({ currentPath, navigate }) {
         </div>
       }>
         <OAuthSuccess navigate={navigate} />
+      </React.Suspense>
+    );
+  }
+
+  if (currentPath.startsWith('/install-success')) {
+    return (
+      <React.Suspense fallback={
+        <div className="min-h-screen bg-[#07090e] flex items-center justify-center">
+          <RefreshCw className="w-8 h-8 text-violet-500 animate-spin" />
+        </div>
+      }>
+        <InstallSuccess navigate={navigate} />
       </React.Suspense>
     );
   }

@@ -155,3 +155,82 @@ INSTRUCTIONS:
         throw new Error(`AI Provider Error: ${msg || 'Failed to explain activity'}`);
     }
 };
+
+/**
+ * Generate a premium AI summary and risk analysis for a Pull Request.
+ */
+export const generatePRSummary = async (prData) => {
+    try {
+        const apiKey = getApiKey();
+        if (!apiKey) {
+            return {
+                summary: `This pull request modifies ${prData.changed_files || 1} files with additions of +${prData.additions || 0} and deletions of -${prData.deletions || 0}.`,
+                risk_analysis: 'Mock Risk Analysis: Low. Normal repository code progression.',
+                impacted_modules: 'Core Controller, Main Module'
+            };
+        }
+
+        const systemPrompt = `You are a technical lead reviewing a developer's Pull Request.
+You will generate a JSON response representing:
+1. "summary": A brief, manager-friendly explanation of the PR's intent (2-3 sentences).
+2. "risk_analysis": A paragraph evaluating potential side-effects, risk level (Low, Medium, High), and logic safety.
+3. "impacted_modules": A comma-separated list of potential components, directories, or architectural modules affected.
+
+Your output MUST be a valid JSON object ONLY. Do NOT output any other text or code blocks.
+Format:
+{
+  "summary": "...",
+  "risk_analysis": "...",
+  "impacted_modules": "..."
+}`;
+
+        const userPrompt = `Pull Request Details:
+Title: ${prData.title}
+Description: ${prData.description || 'No description provided.'}
+Repository: ${prData.repository_name}
+Branch: ${prData.branch}
+Stats: ${prData.changed_files} files changed, +${prData.additions} additions, -${prData.deletions} deletions.`;
+
+        console.log(`[AI Service] Generating PR summary and risk profile for: "${prData.title}"`);
+
+        const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                model: 'llama-3.3-70b-versatile', 
+                messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt }
+                ],
+                max_tokens: 1024,
+                temperature: 0.4
+            })
+        });
+
+        if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(`Groq API Error (${response.status}): ${errData.error?.message || response.statusText}`);
+        }
+
+        const data = await response.json();
+        const text = data.choices[0].message.content.trim();
+        
+        try {
+            return JSON.parse(text);
+        } catch (parseErr) {
+            console.warn('⚠️ [AI Service] Failed to parse PR JSON, falling back to simple object:', parseErr.message);
+            return {
+                summary: text,
+                risk_analysis: 'Risk Rating: Low to Medium. Assumed safety.',
+                impacted_modules: 'General, Backend'
+            };
+        }
+    } catch (error) {
+        console.error('[AI Service] Error generating PR summary:', error);
+        throw error;
+    }
+};
+

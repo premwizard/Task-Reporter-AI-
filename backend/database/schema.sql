@@ -108,4 +108,27 @@ CREATE TABLE IF NOT EXISTS github_installations (
 );
 CREATE INDEX IF NOT EXISTS idx_github_installations_user_id ON github_installations(user_id);
 
+-- 9. Create GitHub Pull Requests Table
+CREATE TABLE IF NOT EXISTS pull_requests (
+    id SERIAL PRIMARY KEY,
+    github_pr_id BIGINT UNIQUE NOT NULL,
+    repository_name VARCHAR(255) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    author VARCHAR(255) NOT NULL,
+    state VARCHAR(50) NOT NULL,
+    merged BOOLEAN DEFAULT FALSE,
+    branch VARCHAR(255) NOT NULL,
+    additions INTEGER DEFAULT 0,
+    deletions INTEGER DEFAULT 0,
+    changed_files INTEGER DEFAULT 0,
+    pr_url VARCHAR(500),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    merged_at TIMESTAMP WITH TIME ZONE,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pull_requests_author ON pull_requests(author);
+CREATE INDEX IF NOT EXISTS idx_pull_requests_repo ON pull_requests(repository_name);
+
+
 

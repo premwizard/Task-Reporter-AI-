@@ -20,6 +20,8 @@ import employeeRoutes from './routes/employeeRoutes.js';
 import whatsappRoutes from './routes/whatsappRoutes.js';
 import taskRoutes from './routes/taskRoutes.js';
 import githubAppRoutes from './routes/githubAppRoutes.js';
+import pullRequestRoutes from './routes/pullRequestRoutes.js';
+import standupRoutes from './routes/standupRoutes.js';
 
 import { initPassport } from './config/passport.js';
 import { initSocketIO } from './socket.js';
@@ -157,6 +159,8 @@ app.use('/api', employeeRoutes);
 app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/github-app', githubAppRoutes);
+app.use('/api/pull-requests', pullRequestRoutes);
+app.use('/api/ai', standupRoutes);
 
 // STEP 16 — ADD HEALTH CHECK ENDPOINTS
 app.get('/health', async (req, res) => {

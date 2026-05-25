@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
+import { pool } from '../database/db.js';
 
 dotenv.config();
 
@@ -37,4 +38,29 @@ export const isAdmin = (req, res, next) => {
   }
 
   next();
+};
+
+export const requireGithubAppInstallation = async (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Unauthorized: Authentication required.' });
+  }
+  
+  try {
+    const result = await pool.query(
+      `SELECT 1 FROM github_installations WHERE user_id = $1 OR account_login = $2 LIMIT 1`,
+      [req.user.id, req.user.github_username]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(403).json({ 
+        error: 'Forbidden: GitHub App installation required.',
+        requires_installation: true
+      });
+    }
+    
+    next();
+  } catch (err) {
+    console.error('❌ [Installation Verification Middleware Error]', err.message);
+    res.status(500).json({ error: 'Failed to verify installation status.' });
+  }
 };
