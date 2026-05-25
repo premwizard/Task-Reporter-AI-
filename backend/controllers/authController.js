@@ -347,9 +347,9 @@ async function saveConnectedRepoAuth(userId, repoFullName, repoName, webhookId, 
 
 /**
  * Handle successful GitHub authentication callback
- * Signs JWT token, sets HTTP-only cookie, and redirects user to frontend dashboard
+ * Checks GitHub App installation status and routes user accordingly
  */
-export const handleGithubCallback = (req, res) => {
+export const handleGithubCallback = async (req, res) => {
   try {
     const user = req.user;
     if (!user) {
@@ -357,39 +357,100 @@ export const handleGithubCallback = (req, res) => {
       return res.redirect(`${process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app'}/login?error=no_user`);
     }
 
-    // Generate JWT
-    const token = jwt.sign(
-      {
-        id: user.id,
-        github_id: user.github_id,
-        github_username: user.github_username,
-        github_avatar: user.github_avatar,
-        github_email: user.github_email,
-        role: user.role,
-      },
-      JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    console.log(`\n🔑 [OAuth Callback Success] User "${user.github_username}" authenticated successfully via OAuth.`);
+    
+    // Check installation status using their github_access_token via GitHub API
+    const octokit = new Octokit({ auth: user.github_access_token });
+    let appInstallation = null;
 
-    // Set secure HTTP-only cookie
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    });
+    try {
+      console.log(`🔍 [OAuth Callback Sync] Checking active installations for user @${user.github_username}...`);
+      const { data: installationsData } = await octokit.apps.listInstallationsForAuthenticatedUser();
+      const installations = installationsData.installations || [];
+      const targetSlug = (process.env.GITHUB_APP_NAME || 'task-reporter-ai').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+      appInstallation = installations.find(inst => inst.app_slug === targetSlug || inst.app_id === parseInt(process.env.GITHUB_APP_ID));
+    } catch (err) {
+      console.error("⚠️ [OAuth Callback Check] Failed to check installations list via GitHub API:", err.message);
+    }
 
-    console.log(`[OAuth success] User "${user.github_username}" logged in. Role: ${user.role}`);
+    if (appInstallation) {
+      console.log(`✅ [OAuth Callback Check] App already installed (ID: ${appInstallation.id}). Syncing all repositories...`);
+      
+      try {
+        const { githubApp } = await import('../config/githubApp.js');
+        const appOctokit = await githubApp.getInstallationOctokit(appInstallation.id);
+        const { data: reposData } = await appOctokit.apps.listReposAccessibleToInstallation();
+        const repositories = reposData.repositories || [];
+        
+        console.log(`📦 [OAuth Callback Check] Found ${repositories.length} accessible repos for installation ${appInstallation.id}`);
 
-    // 🚀 AUTO-CONNECT: Fire webhook creation for ALL repos in background (non-blocking)
-    // This is what makes the system fully automatic — no manual setup required.
-    setImmediate(() => autoConnectAllReposAfterLogin(user));
+        const insertQuery = `
+          INSERT INTO github_installations (user_id, installation_id, account_login, account_type, repositories, github_username, installed_at)
+          VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+          ON CONFLICT (installation_id)
+          DO UPDATE SET user_id = $1, account_login = $3, account_type = $4, repositories = $5, github_username = $6, installed_at = CURRENT_TIMESTAMP
+          RETURNING *
+        `;
+        await pool.query(insertQuery, [user.id, appInstallation.id, appInstallation.account.login, appInstallation.account.type, JSON.stringify(repositories), user.github_username]);
+        
+        if (repositories.length > 0) {
+          for (const repo of repositories) {
+            await pool.query(
+              `INSERT INTO connected_repositories (user_id, repository_name, repo_name, status)
+               VALUES ($1, $2, $3, 'active')
+               ON CONFLICT (user_id, repository_name)
+               DO UPDATE SET status = 'active'`,
+              [user.id, repo.full_name, repo.name]
+            );
+          }
+        }
+        console.log(`✅ [OAuth Callback Sync] Repository connection cache populated successfully.`);
+      } catch (syncErr) {
+        console.error("⚠️ [OAuth Callback Check] Repository synchronization failed:", syncErr.message);
+      }
 
-    // Redirect to frontend with token parameter
-    const frontendUrl = (process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app').replace(/\/$/, "");
-    res.redirect(`${frontendUrl}/oauth-success?token=${token}`);
+      // Generate JWT
+      const token = jwt.sign(
+        {
+          id: user.id,
+          github_id: user.github_id,
+          github_username: user.github_username,
+          github_avatar: user.github_avatar,
+          github_email: user.github_email,
+          role: user.role,
+        },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      // Set secure HTTP-only cookie
+      res.cookie('token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      });
+
+      const frontendUrl = (process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app').replace(/\/$/, "");
+      console.log(`🚀 [OAuth Success Redirect] Redirecting user directly to dashboard.`);
+      return res.redirect(`${frontendUrl}/oauth-success?token=${token}&onboarding=completed`);
+    } else {
+      console.log(`❌ [OAuth Callback Check] App installation NOT found for @${user.github_username}. Redirecting to app installation setup...`);
+      
+      const stateObj = {
+        user_id: user.id,
+        onboarding: true,
+        redirect_intent: 'dashboard'
+      };
+      const encodedState = Buffer.from(JSON.stringify(stateObj)).toString('base64');
+      const appSlug = (process.env.GITHUB_APP_NAME || 'task-reporter-ai').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+      const installUrl = `https://github.com/apps/${appSlug}/installations/new?state=${encodedState}`;
+      
+      console.log(`🔗 [OAuth Callback Check] Directing client to: ${installUrl}`);
+      return res.redirect(installUrl);
+    }
   } catch (err) {
-    console.error('[OAuth Callback] Error handling login redirect:', err);
+    console.error('[OAuth Callback] Error handling callback redirect:', err);
     const frontendUrl = (process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app').replace(/\/$/, "");
     res.redirect(`${frontendUrl}/login?error=server_error`);
   }

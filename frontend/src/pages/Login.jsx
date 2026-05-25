@@ -33,7 +33,7 @@ const Login = ({ navigate }) => {
     
     const backendUrl = getBackendBaseUrl();
     
-    window.location.href = `${backendUrl}/auth/github`;
+    window.location.href = `${backendUrl}/auth/github/start`;
   };
 
 
