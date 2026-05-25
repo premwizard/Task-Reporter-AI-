@@ -20,6 +20,7 @@ router.post('/webhook', (req, res, next) => {
 }, handleGithubAppWebhook);
 
 // Authenticated management endpoints
+router.get('/status', authenticateToken, getInstallationStatus);
 router.get('/installation-status', authenticateToken, getInstallationStatus);
 router.get('/setup', handleSetupRedirect); // GitHub redirects here after install
 router.post('/bind', authenticateToken, bindInstallation);

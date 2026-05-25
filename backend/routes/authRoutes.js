@@ -76,22 +76,6 @@ router.get('/github-app/setup', async (req, res) => {
       }
     }
     
-    const userId = decodedState.user_id;
-    if (!userId) {
-      console.error("❌ [GitHub App setup callback] State does not contain valid user_id.");
-      const frontendUrl = (process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app').replace(/\/$/, "");
-      return res.redirect(`${frontendUrl}/login?error=session_expired`);
-    }
-    
-    // 2. Fetch user from DB
-    const userQuery = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
-    if (userQuery.rows.length === 0) {
-      console.error(`❌ [GitHub App setup callback] User ID ${userId} not found in database.`);
-      const frontendUrl = (process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app').replace(/\/$/, "");
-      return res.redirect(`${frontendUrl}/login?error=user_not_found`);
-    }
-    const user = userQuery.rows[0];
-    
     // 3. Call GitHub App Octokit to get installation details and repositories
     console.log(`🔌 [GitHub App Setup] Fetching repositories accessible to installation ID: ${installation_id}`);
     const appOctokit = await githubApp.getInstallationOctokit(parseInt(installation_id));
@@ -104,6 +88,32 @@ router.get('/github-app/setup', async (req, res) => {
     const accountType = instDetails.account.type;
     
     console.log(`💡 [GitHub App Setup] Found installation details. Owner: ${accountLogin} (${accountType}), Accessible repos: ${repositories.length}`);
+
+    // Resolve user context (via secure decoded state OR by matching the active github_username)
+    let user = null;
+    const userId = decodedState.user_id;
+
+    if (userId) {
+      const userQuery = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
+      if (userQuery.rows.length > 0) {
+        user = userQuery.rows[0];
+      }
+    }
+
+    if (!user && accountLogin) {
+      console.log(`🔍 [GitHub App Setup] User state ID missing or invalid. Attempting username matching for @${accountLogin}...`);
+      const userQuery = await pool.query('SELECT * FROM users WHERE github_username = $1', [accountLogin]);
+      if (userQuery.rows.length > 0) {
+        user = userQuery.rows[0];
+        console.log(`✅ [GitHub App Setup] Successfully matched user @${accountLogin} inside database (ID: ${user.id})`);
+      }
+    }
+
+    if (!user) {
+      console.error(`❌ [GitHub App Setup callback] No registered user matches installation owner @${accountLogin}`);
+      const frontendUrl = (process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app').replace(/\/$/, "");
+      return res.redirect(`${frontendUrl}/login?error=user_not_found`);
+    }
     
     // 5. Store installation Details in PostgreSQL DB
     const insertQuery = `

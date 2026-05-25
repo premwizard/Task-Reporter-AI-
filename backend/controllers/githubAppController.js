@@ -348,6 +348,20 @@ export const bindInstallation = async (req, res) => {
     `;
     const result = await pool.query(query, [userId, parseInt(installation_id), accountLogin, accountType, JSON.stringify(repositories)]);
 
+    // Automatically sync and store repositories to connected_repositories (Step 8 & 9)
+    if (repositories.length > 0) {
+      console.log(`🔄 [Bind Installation Sync] Syncing ${repositories.length} repositories into connected_repositories...`);
+      for (const repo of repositories) {
+        await pool.query(
+          `INSERT INTO connected_repositories (user_id, repository_name, repo_name, status)
+           VALUES ($1, $2, $3, 'active')
+           ON CONFLICT (user_id, repository_name)
+           DO UPDATE SET status = 'active'`,
+          [userId, repo.full_name, repo.name]
+        );
+      }
+    }
+
     res.status(200).json({ success: true, installation: result.rows[0] });
   } catch (err) {
     console.error('❌ [Bind Installation Error]', err.message);
