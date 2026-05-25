@@ -425,6 +425,17 @@ ActivityTableRow.displayName = 'ActivityTableRow';
 
 function MainAppContent() {
   const { user, logout } = useAuth();
+
+  // STEP 11 — ADD FRONTEND SUCCESS HANDLING
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('setup') === 'success' || params.get('github_connected') === 'true' || window.location.search.includes('setup=success')) {
+      toast.success('GitHub App connected successfully!', { id: 'setup-success-toast', duration: 5000 });
+      // Clean query params gracefully
+      const cleanUrl = window.location.pathname;
+      window.history.replaceState({}, document.title, cleanUrl);
+    }
+  }, []);
   
   const [isDarkMode, setIsDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {

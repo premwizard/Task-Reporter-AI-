@@ -17,13 +17,11 @@ export default function OAuthSuccess({ navigate }) {
       
       verifySession().then(() => {
         if (onboarding === 'completed') {
-          toast.success('Integration connected successfully!', { id: 'onboarding-toast', duration: 4000 });
+          navigate('/?setup=success');
         } else {
           toast.success('Welcome back to GitIntel!');
+          navigate('/');
         }
-        
-        console.log('[OAuthSuccess] Session verified. Navigating to dashboard workspace...');
-        navigate('/');
       }).catch((err) => {
         console.error('[OAuthSuccess] Verification check failed:', err);
         localStorage.removeItem('token');
