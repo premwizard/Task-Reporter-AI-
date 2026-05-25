@@ -88,7 +88,7 @@ export const initDatabase = async () => {
       SELECT table_name 
       FROM information_schema.tables 
       WHERE table_schema = 'public' 
-      AND table_name IN ('users', 'activities', 'repositories', 'connected_repositories', 'tasks', 'ai_reports');
+      AND table_name IN ('users', 'activities', 'repositories', 'connected_repositories', 'tasks', 'ai_reports', 'github_installations');
     `;
     const res = await pool.query(checkTablesQuery);
     const existingTables = res.rows.map(row => row.table_name);
@@ -121,6 +121,12 @@ export const initDatabase = async () => {
       console.log("✅ ai_reports table ready");
     } else {
       console.warn("⚠️ ai_reports table is missing!");
+    }
+
+    if (existingTables.includes('github_installations')) {
+      console.log("✅ github_installations table ready");
+    } else {
+      console.warn("⚠️ github_installations table is missing!");
     }
     
     console.log("🚀 Database initialization complete and verified!");

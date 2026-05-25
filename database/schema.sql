@@ -106,3 +106,16 @@ ALTER TABLE repositories ADD COLUMN IF NOT EXISTS webhook_created BOOLEAN DEFAUL
 ALTER TABLE repositories ADD COLUMN IF NOT EXISTS error_message TEXT;
 ALTER TABLE repositories ADD COLUMN IF NOT EXISTS last_sync TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 
+-- 8. Create GitHub App Installations Table
+CREATE TABLE IF NOT EXISTS github_installations (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    installation_id BIGINT UNIQUE NOT NULL,
+    account_login VARCHAR(255) NOT NULL,
+    account_type VARCHAR(50) NOT NULL,
+    repositories JSONB DEFAULT '[]'::jsonb,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_github_installations_user_id ON github_installations(user_id);
+
+
