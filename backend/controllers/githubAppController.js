@@ -396,16 +396,49 @@ export const bindInstallation = async (req, res) => {
 
 export const getConnectedRepositories = async (req, res) => {
   const userId = req.user?.id;
+  const username = req.user?.github_username;
 
   try {
-    // Query active connected repositories (Step 6)
+    // Query active connected repositories for this user
     const activeConnQuery = await pool.query(
       `SELECT repository_name, status FROM connected_repositories WHERE user_id = $1`,
       [userId]
     );
     const activeSet = new Set(activeConnQuery.rows.map(r => r.repository_name));
 
-    const instRes = await pool.query(`SELECT * FROM github_installations WHERE user_id = $1`, [userId]);
+    // CRITICAL FIX: Find installations by user_id first, then fall back to
+    // account_login matching github_username, then ANY installation (last resort)
+    let instRes = await pool.query(`SELECT * FROM github_installations WHERE user_id = $1`, [userId]);
+
+    // Fallback 1: match by github_username as account_login
+    if (instRes.rows.length === 0 && username) {
+      console.log(`⚠️ [Repos] No installations by user_id ${userId}, trying account_login='${username}'...`);
+      instRes = await pool.query(`SELECT * FROM github_installations WHERE account_login = $1`, [username]);
+      // Re-link installation to this user_id
+      if (instRes.rows.length > 0) {
+        await pool.query(`UPDATE github_installations SET user_id = $1 WHERE account_login = $2`, [userId, username]);
+        console.log(`🔗 [Repos] Relinked ${instRes.rows.length} installation(s) to user_id ${userId}`);
+      }
+    }
+
+    // Fallback 2: if user has connected repos in DB but no installation record, synthesise from connected_repos
+    if (instRes.rows.length === 0 && activeConnQuery.rows.length > 0) {
+      console.log(`⚠️ [Repos] No installations found, but ${activeConnQuery.rows.length} connected repos exist. Returning from connected_repositories table.`);
+      const fallbackRepos = activeConnQuery.rows.map(r => ({
+        id: null,
+        name: r.repo_name || r.repository_name.split('/').pop(),
+        full_name: r.repository_name,
+        private: false,
+        owner: r.repository_name.split('/')[0],
+        installation_id: null,
+        account_login: r.repository_name.split('/')[0],
+        connected: true,
+        webhook_active: true,
+        organization: null
+      }));
+      return res.status(200).json(fallbackRepos);
+    }
+
     let allRepos = [];
 
     for (const inst of instRes.rows) {
@@ -651,28 +684,71 @@ export const getInstallationStatus = async (req, res) => {
   const userId = req.user?.id;
   const username = req.user?.github_username;
 
-  console.log(`🔍 [Installation Check] Verifying status for user_id ${userId} (@${username})`);
+  console.log(`🔍 [Installation Check] user_id=${userId} github_username=${username}`);
 
   try {
-    // 1. Check local database first
-    const dbQuery = await pool.query(
-      `SELECT * FROM github_installations WHERE user_id = $1 OR account_login = $2 ORDER BY created_at DESC LIMIT 1`,
-      [userId, username]
+    // ── SIGNAL 1: DB lookup by user_id ──────────────────────────────────
+    const byUserId = await pool.query(
+      `SELECT * FROM github_installations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [userId]
     );
-
-    if (dbQuery.rows.length > 0) {
-      const inst = dbQuery.rows[0];
-      console.log(`✅ [Installation Check] Found DB record. Inst ID: ${inst.installation_id}`);
+    if (byUserId.rows.length > 0) {
+      const inst = byUserId.rows[0];
+      console.log(`✅ [Signal 1] Found installation by user_id. inst_id=${inst.installation_id} account=${inst.account_login}`);
       return res.status(200).json({
-        installed: true,
-        installationId: parseInt(inst.installation_id),
-        account: inst.account_login
+        installed: true, installationId: parseInt(inst.installation_id), account: inst.account_login,
+        source: 'db_user_id'
       });
     }
 
-    // 2. If not in DB, check GitHub API /user/installations using their oauth token
-    const userQuery = await pool.query(`SELECT github_access_token FROM users WHERE id = $1`, [userId]);
-    const oauthToken = userQuery.rows[0]?.github_access_token;
+    // ── SIGNAL 2: DB lookup by github_username as account_login ─────────
+    if (username) {
+      const byUsername = await pool.query(
+        `SELECT * FROM github_installations WHERE account_login = $1 ORDER BY created_at DESC LIMIT 1`,
+        [username]
+      );
+      if (byUsername.rows.length > 0) {
+        const inst = byUsername.rows[0];
+        console.log(`✅ [Signal 2] Found installation by account_login='${username}'. Relinking to user_id=${userId}.`);
+        // Re-link the orphaned installation to this user_id
+        await pool.query(`UPDATE github_installations SET user_id = $1 WHERE id = $2`, [userId, inst.id]);
+        return res.status(200).json({
+          installed: true, installationId: parseInt(inst.installation_id), account: inst.account_login,
+          source: 'db_account_login'
+        });
+      }
+    }
+
+    // ── SIGNAL 3: Connected repos exist for this user ────────────────────
+    const connRepos = await pool.query(
+      `SELECT COUNT(*) as count FROM connected_repositories WHERE user_id = $1`,
+      [userId]
+    );
+    if (parseInt(connRepos.rows[0].count) > 0) {
+      console.log(`✅ [Signal 3] User has ${connRepos.rows[0].count} connected repos. App is installed.`);
+      return res.status(200).json({
+        installed: true, installationId: null, account: username || null,
+        source: 'connected_repos', repositoriesCount: parseInt(connRepos.rows[0].count)
+      });
+    }
+
+    // ── SIGNAL 4: Activities exist for this user ─────────────────────────
+    const userActivities = await pool.query(
+      `SELECT COUNT(*) as count FROM activities WHERE user_id = $1`,
+      [userId]
+    );
+    if (parseInt(userActivities.rows[0].count) > 0) {
+      console.log(`✅ [Signal 4] User has ${userActivities.rows[0].count} activities. App is installed.`);
+      return res.status(200).json({
+        installed: true, installationId: null, account: username || null,
+        source: 'activities', activitiesCount: parseInt(userActivities.rows[0].count)
+      });
+    }
+
+    // ── SIGNAL 5: GitHub API fallback (if OAuth token available) ─────────
+    const userRow = await pool.query(`SELECT github_access_token, github_username FROM users WHERE id = $1`, [userId]);
+    const oauthToken = userRow.rows[0]?.github_access_token;
+    const resolvedUsername = userRow.rows[0]?.github_username || username;
 
     if (oauthToken) {
       try {
@@ -681,62 +757,56 @@ export const getInstallationStatus = async (req, res) => {
         const { data: installationsData } = await octokit.apps.listInstallationsForAuthenticatedUser();
         const installations = installationsData.installations || [];
 
-        // Find installation for our specific app slug/id
         const targetSlug = (process.env.GITHUB_APP_NAME || 'task-reporter-ai').toLowerCase().replace(/\s+/g, '-');
-        const appInstallation = installations.find(inst => inst.app_slug === targetSlug || inst.app_id === parseInt(process.env.GITHUB_APP_ID));
+        const appInstallation = installations.find(i => i.app_slug === targetSlug || i.app_id === parseInt(process.env.GITHUB_APP_ID));
 
         if (appInstallation) {
-          console.log(`💡 [App Discovery] Found active installation ${appInstallation.id} on GitHub. Syncing...`);
-          
+          console.log(`✅ [Signal 5] Found GitHub API installation ${appInstallation.id}. Auto-saving to DB...`);
           const accountLogin = appInstallation.account.login;
           const accountType = appInstallation.account.type;
 
-          // Fetch repositories accessible
-          const appOctokit = await githubApp.getInstallationOctokit(appInstallation.id);
-          const { data: reposData } = await appOctokit.apps.listReposAccessibleToInstallation();
-          const repositories = reposData.repositories || [];
+          let repositories = [];
+          try {
+            const appOctokit = await githubApp.getInstallationOctokit(appInstallation.id);
+            const { data: reposData } = await appOctokit.apps.listReposAccessibleToInstallation();
+            repositories = reposData.repositories || [];
+          } catch (repoErr) {
+            console.warn(`⚠️ Could not fetch repos: ${repoErr.message}`);
+          }
 
-          const insertQuery = `
-            INSERT INTO github_installations (user_id, installation_id, account_login, account_type, repositories, github_username, installed_at)
-            VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
-            ON CONFLICT (installation_id)
-            DO UPDATE SET user_id = $1, account_login = $3, account_type = $4, repositories = $5, github_username = $6, installed_at = CURRENT_TIMESTAMP
-            RETURNING *
-          `;
-          await pool.query(insertQuery, [userId, appInstallation.id, accountLogin, accountType, JSON.stringify(repositories), username]);
+          await pool.query(
+            `INSERT INTO github_installations (user_id, installation_id, account_login, account_type, repositories, github_username, installed_at)
+             VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
+             ON CONFLICT (installation_id)
+             DO UPDATE SET user_id = $1, account_login = $3, account_type = $4, repositories = $5, github_username = $6`,
+            [userId, appInstallation.id, accountLogin, accountType, JSON.stringify(repositories), resolvedUsername]
+          );
 
-          // Auto-sync repositories to connected_repositories
-          if (repositories.length > 0) {
-            console.log(`🔄 [Auto-sync Repos] Inserting ${repositories.length} repositories for user_id ${userId}...`);
-            for (const repo of repositories) {
-              await pool.query(
-                `INSERT INTO connected_repositories (user_id, repository_name, repo_name, status)
-                 VALUES ($1, $2, $3, 'active')
-                 ON CONFLICT (user_id, repository_name) DO NOTHING`,
-                [userId, repo.full_name, repo.name]
-              );
-            }
+          for (const repo of repositories) {
+            await pool.query(
+              `INSERT INTO connected_repositories (user_id, repository_name, repo_name, status)
+               VALUES ($1, $2, $3, 'active')
+               ON CONFLICT (user_id, repository_name) DO NOTHING`,
+              [userId, repo.full_name, repo.name]
+            );
           }
 
           return res.status(200).json({
-            installed: true,
-            installationId: appInstallation.id,
-            account: accountLogin
+            installed: true, installationId: appInstallation.id, account: accountLogin,
+            source: 'github_api'
           });
         }
       } catch (ghErr) {
-        console.warn(`⚠️ [Installation Status Check GitHub Error] Could not query installations from GitHub: ${ghErr.message}`);
+        console.warn(`⚠️ [Signal 5 GitHub API Error]: ${ghErr.message}`);
       }
     }
 
-    console.log(`❌ [Installation Check] No installations found for @${username}`);
-    return res.status(200).json({
-      installed: false,
-      installationId: null,
-      account: null
-    });
+    // ── All signals exhausted — not installed ────────────────────────────
+    console.log(`❌ [Installation Check] All 5 signals exhausted. App not installed for user_id=${userId}`);
+    return res.status(200).json({ installed: false, installationId: null, account: null, source: 'none' });
+
   } catch (err) {
-    console.error('❌ [Installation Status Check Error]', err.message);
+    console.error('❌ [Installation Status Error]', err.message);
     res.status(500).json({ error: 'Failed to retrieve installation status: ' + err.message });
   }
 };

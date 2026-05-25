@@ -298,7 +298,7 @@ const ConnectRepos = () => {
       </div>
 
       {/* ── Stats Banner ── */}
-      {installations.length > 0 && (
+      {(installations.length > 0 || repos.length > 0) && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="glass-card p-4 flex items-center gap-3 border-emerald-500/20 bg-emerald-500/[0.01]">
             <div className="w-9 h-9 rounded-xl bg-emerald-500/10 flex items-center justify-center">
@@ -383,8 +383,8 @@ const ConnectRepos = () => {
         </div>
       )}
 
-      {/* ── No installations at all ── */}
-      {installations.length === 0 && (
+      {/* ── No installations AND no repos at all ── */}
+      {installations.length === 0 && repos.length === 0 && (
         <div className="glass-card p-10 text-center flex flex-col items-center justify-center border-dashed border-slate-200 dark:border-zinc-700 max-w-2xl mx-auto">
           <AlertCircle className="w-10 h-10 text-slate-400 dark:text-zinc-600 mb-3" />
           <h3 className="text-base font-bold text-slate-800 dark:text-white mb-1">No GitHub Accounts Connected</h3>
