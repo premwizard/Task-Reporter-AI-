@@ -39,7 +39,23 @@ router.get('/install-url', authenticateToken, (req, res) => {
     .replace(/\s+/g, '-')
     .replace(/[^a-z0-9-]/g, '');
   res.status(200).json({
-    install_url: `https://github.com/apps/${appSlug}/installations/new`
+    install_url: `https://github.com/apps/${appSlug}/installations/new`,
+    org_install_url_template: `https://github.com/organizations/{org}/settings/installations`,
+    app_slug: appSlug
+  });
+});
+
+// Organization-specific install URL
+router.get('/install-url/org/:org', authenticateToken, (req, res) => {
+  const { org } = req.params;
+  const appSlug = (process.env.GITHUB_APP_NAME || 'task-reporter-ai')
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-]/g, '');
+  res.status(200).json({
+    install_url: `https://github.com/apps/${appSlug}/installations/new`,
+    org_settings_url: `https://github.com/organizations/${org}/settings/installations`,
+    manage_url: `https://github.com/apps/${appSlug}/installations/new?suggested_target_id=${org}`
   });
 });
 

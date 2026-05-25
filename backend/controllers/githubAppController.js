@@ -399,99 +399,120 @@ export const getConnectedRepositories = async (req, res) => {
   const username = req.user?.github_username;
 
   try {
-    // Query active connected repositories for this user
+    // ── 1. Active connected repos for this user ──────────────────────────
     const activeConnQuery = await pool.query(
-      `SELECT repository_name, status FROM connected_repositories WHERE user_id = $1`,
+      `SELECT repository_name, repo_name, status FROM connected_repositories WHERE user_id = $1`,
       [userId]
     );
     const activeSet = new Set(activeConnQuery.rows.map(r => r.repository_name));
 
-    // CRITICAL FIX: Find installations by user_id first, then fall back to
-    // account_login matching github_username, then ANY installation (last resort)
+    // ── 2. Resolve all installations linked to this user ─────────────────
     let instRes = await pool.query(`SELECT * FROM github_installations WHERE user_id = $1`, [userId]);
 
-    // Fallback 1: match by github_username as account_login
+    // Fallback A: match by github_username as account_login (orphaned installs)
     if (instRes.rows.length === 0 && username) {
-      console.log(`⚠️ [Repos] No installations by user_id ${userId}, trying account_login='${username}'...`);
+      console.log(`⚠️ [Repos] No installs by user_id=${userId}, trying account_login='${username}'...`);
       instRes = await pool.query(`SELECT * FROM github_installations WHERE account_login = $1`, [username]);
-      // Re-link installation to this user_id
       if (instRes.rows.length > 0) {
         await pool.query(`UPDATE github_installations SET user_id = $1 WHERE account_login = $2`, [userId, username]);
-        console.log(`🔗 [Repos] Relinked ${instRes.rows.length} installation(s) to user_id ${userId}`);
+        console.log(`🔗 [Repos] Relinked ${instRes.rows.length} installation(s) to user_id=${userId}`);
       }
     }
 
-    // Fallback 2: if user has connected repos in DB but no installation record, synthesise from connected_repos
+    // Fallback B: synthesise list from connected_repositories when no installations exist
     if (instRes.rows.length === 0 && activeConnQuery.rows.length > 0) {
-      console.log(`⚠️ [Repos] No installations found, but ${activeConnQuery.rows.length} connected repos exist. Returning from connected_repositories table.`);
+      console.log(`⚠️ [Repos] No installations. Returning ${activeConnQuery.rows.length} repos from connected_repositories.`);
       const fallbackRepos = activeConnQuery.rows.map(r => ({
-        id: null,
-        name: r.repo_name || r.repository_name.split('/').pop(),
-        full_name: r.repository_name,
-        private: false,
-        owner: r.repository_name.split('/')[0],
-        installation_id: null,
+        id: null, name: r.repo_name || r.repository_name.split('/').pop(),
+        full_name: r.repository_name, private: false,
+        owner: r.repository_name.split('/')[0], installation_id: null,
         account_login: r.repository_name.split('/')[0],
-        connected: true,
-        webhook_active: true,
-        organization: null
+        account_type: 'User', connected: true, webhook_active: true,
+        organization: null, ownerType: 'personal',
+        app_install_url: null
       }));
       return res.status(200).json(fallbackRepos);
     }
 
+    // ── 3. Build app slug for org install links ───────────────────────────
+    const appSlug = (process.env.GITHUB_APP_NAME || 'task-reporter-ai')
+      .toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+
     let allRepos = [];
 
     for (const inst of instRes.rows) {
+      const isOrgInstall = inst.account_type === 'Organization';
+      const installBaseLabel = isOrgInstall ? inst.account_login : (username || inst.account_login);
+
+      let liveFetchOk = false;
       try {
         const octokit = await githubApp.getInstallationOctokit(inst.installation_id);
         const { data: reposData } = await octokit.apps.listReposAccessibleToInstallation();
         const repos = reposData.repositories || [];
+        liveFetchOk = true;
 
         const mapped = repos.map(r => {
           const isConnected = activeSet.has(r.full_name);
+          // Determine ownership type
+          let ownerType = 'personal';
+          if (isOrgInstall) ownerType = 'organization';
+          else if (r.owner.login !== inst.account_login) ownerType = 'collaborator';
+
           return {
-            id: r.id,
-            name: r.name,
-            full_name: r.full_name,
-            private: r.private,
-            owner: r.owner.login,
+            id: r.id, name: r.name, full_name: r.full_name,
+            private: r.private, owner: r.owner.login,
             installation_id: inst.installation_id,
+            installation_db_id: inst.id,
             account_login: inst.account_login,
-            connected: isConnected,
-            webhook_active: isConnected,
-            organization: inst.account_type === 'Organization' ? inst.account_login : null
+            account_type: inst.account_type,
+            connected: isConnected, webhook_active: isConnected,
+            organization: isOrgInstall ? inst.account_login : null,
+            ownerType,
+            app_install_url: null  // already installed via this inst
           };
         });
 
         allRepos = [...allRepos, ...mapped];
 
         // Cache back to DB
-        await pool.query(`UPDATE github_installations SET repositories = $1 WHERE id = $2`, [JSON.stringify(repos), inst.id]);
+        await pool.query(
+          `UPDATE github_installations SET repositories = $1 WHERE id = $2`,
+          [JSON.stringify(repos), inst.id]
+        );
       } catch (instErr) {
-        console.error(`⚠️ Failed to sync live repos for installation ${inst.installation_id}:`, instErr.message);
-        
-        // Return cached list
-        const cached = inst.repositories || [];
+        console.error(`⚠️ Live fetch failed for installation ${inst.installation_id}:`, instErr.message);
+
+        // Fall back to cached list
+        const cached = Array.isArray(inst.repositories) ? inst.repositories : [];
         const mapped = cached.map(r => {
           const isConnected = activeSet.has(r.full_name);
+          let ownerType = isOrgInstall ? 'organization' : 'personal';
           return {
-            id: r.id,
-            name: r.name,
-            full_name: r.full_name,
-            private: r.private,
-            owner: r.owner?.login || inst.account_login,
+            id: r.id, name: r.name, full_name: r.full_name,
+            private: r.private, owner: r.owner?.login || inst.account_login,
             installation_id: inst.installation_id,
+            installation_db_id: inst.id,
             account_login: inst.account_login,
-            connected: isConnected,
-            webhook_active: isConnected,
-            organization: inst.account_type === 'Organization' ? inst.account_login : null
+            account_type: inst.account_type,
+            connected: isConnected, webhook_active: isConnected,
+            organization: isOrgInstall ? inst.account_login : null,
+            ownerType,
+            app_install_url: null
           };
         });
         allRepos = [...allRepos, ...mapped];
       }
     }
 
-    res.status(200).json(allRepos);
+    // De-duplicate by full_name (in case user has both personal + org installs covering same repo)
+    const seen = new Set();
+    const dedupedRepos = allRepos.filter(r => {
+      if (seen.has(r.full_name)) return false;
+      seen.add(r.full_name);
+      return true;
+    });
+
+    res.status(200).json(dedupedRepos);
   } catch (err) {
     console.error('❌ [Get App Repos Error]', err.message);
     res.status(500).json({ error: 'Failed to fetch repositories: ' + err.message });
