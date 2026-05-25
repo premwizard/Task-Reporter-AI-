@@ -448,10 +448,12 @@ export const handleGithubCallback = async (req, res) => {
       );
 
       // Set secure HTTP-only cookie
+      // Set secure HTTP-only cookie with sameSite none for Render + Vercel
+      const isProd = process.env.NODE_ENV === 'production' || !req.headers.host?.includes('localhost');
       res.cookie('token', token, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+        secure: isProd,
+        sameSite: isProd ? 'none' : 'lax',
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
       });
 
@@ -460,7 +462,30 @@ export const handleGithubCallback = async (req, res) => {
       return res.redirect(`${frontendUrl}/oauth-success?token=${token}&onboarding=completed`);
     } else {
       // 4. If completely missing installation, redirect user to GitHub App installation page
-      console.log(`❌ App installation not found for user @${user.github_username}. Redirecting to setup...`);
+      console.log(`❌ App installation not found for user @${user.github_username}. Creating secure auth token and redirecting to setup...`);
+      
+      // Generate secure JWT BEFORE redirecting to GitHub App installation page (Step 3)
+      const token = jwt.sign(
+        {
+          id: user.id,
+          github_id: user.github_id,
+          github_username: user.github_username,
+          github_avatar: user.github_avatar,
+          github_email: user.github_email,
+          role: user.role,
+        },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      // Set secure HTTP-only cookie with sameSite none (Step 2)
+      const isProd = process.env.NODE_ENV === 'production' || !req.headers.host?.includes('localhost');
+      res.cookie('token', token, {
+        httpOnly: true,
+        secure: isProd,
+        sameSite: isProd ? 'none' : 'lax',
+        maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      });
       
       const stateObj = {
         user_id: user.id,
@@ -471,7 +496,7 @@ export const handleGithubCallback = async (req, res) => {
       const appSlug = (process.env.GITHUB_APP_NAME || 'task-reporter-ai').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
       const installUrl = `https://github.com/apps/${appSlug}/installations/new?state=${encodedState}`;
       
-      console.log(`🔗 Directing client to: ${installUrl}`);
+      console.log(`🔗 Directing client to: ${installUrl} with active cookie`);
       return res.redirect(installUrl);
     }
   } catch (err) {

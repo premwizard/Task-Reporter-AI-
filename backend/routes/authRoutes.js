@@ -89,19 +89,35 @@ router.get('/github-app/setup', async (req, res) => {
     
     console.log(`💡 [GitHub App Setup] Found installation details. Owner: ${accountLogin} (${accountType}), Accessible repos: ${repositories.length}`);
 
-    // Resolve user context (via secure decoded state OR by matching the active github_username)
+    // Resolve user context (via active cookie session first, then state ID, then owner matching)
     let user = null;
     const userId = decodedState.user_id;
 
-    if (userId) {
+    // Check for cookie token first! (Step 4)
+    const cookieToken = req.cookies?.token;
+    if (cookieToken) {
+      try {
+        const decoded = jwt.verify(cookieToken, JWT_SECRET);
+        const userQuery = await pool.query('SELECT * FROM users WHERE id = $1', [decoded.id]);
+        if (userQuery.rows.length > 0) {
+          user = userQuery.rows[0];
+          console.log(`🍪 [GitHub App Setup] Successfully verified session from cookie: @${user.github_username} (ID: ${user.id})`);
+        }
+      } catch (cookieErr) {
+        console.warn("⚠️ [GitHub App Setup] Failed to verify cookie session token:", cookieErr.message);
+      }
+    }
+
+    if (!user && userId) {
       const userQuery = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
       if (userQuery.rows.length > 0) {
         user = userQuery.rows[0];
+        console.log(`🔑 [GitHub App Setup] Resolved user from state parameter: @${user.github_username}`);
       }
     }
 
     if (!user && accountLogin) {
-      console.log(`🔍 [GitHub App Setup] User state ID missing or invalid. Attempting username matching for @${accountLogin}...`);
+      console.log(`🔍 [GitHub App Setup] Cookie & state ID resolution missing. Attempting username matching for @${accountLogin}...`);
       const userQuery = await pool.query('SELECT * FROM users WHERE github_username = $1', [accountLogin]);
       if (userQuery.rows.length > 0) {
         user = userQuery.rows[0];
@@ -155,10 +171,11 @@ router.get('/github-app/setup', async (req, res) => {
     );
     
     // Set secure HTTP-only cookie
+    const isProd = process.env.NODE_ENV === 'production' || !req.headers.host?.includes('localhost');
     res.cookie('token', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      secure: isProd,
+      sameSite: isProd ? 'none' : 'lax',
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
     
