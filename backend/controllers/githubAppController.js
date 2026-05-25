@@ -361,6 +361,14 @@ export const bindInstallation = async (req, res) => {
         );
       }
     }
+    // After storing installation, ensure user record has github_username set
+    if (userId) {
+      const userCheck = await pool.query('SELECT github_username FROM users WHERE id = $1', [userId]);
+      if (userCheck.rows.length > 0 && (!userCheck.rows[0].github_username || userCheck.rows[0].github_username === null)) {
+        await pool.query('UPDATE users SET github_username = $1 WHERE id = $2', [accountLogin, userId]);
+        console.log(`🔧 [Bind Installation] Updated user ${userId} with github_username ${accountLogin}`);
+      }
+    }
 
     res.status(200).json({ success: true, installation: result.rows[0] });
   } catch (err) {

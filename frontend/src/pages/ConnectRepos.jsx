@@ -39,6 +39,8 @@ const ConnectRepos = () => {
         window.history.replaceState({}, document.title, cleanUrl);
         
         toast.success('GitHub App integrated successfully!', { id: toastId, duration: 4000 });
+        // Refresh data to reflect new installation and repositories
+        await fetchData(true);
       } catch (err) {
         toast.error('Failed to link GitHub App: ' + err.message, { id: toastId, duration: 5000 });
       } finally {
