@@ -369,13 +369,17 @@ export const bindInstallation = async (req, res) => {
   }
 };
 
-/**
- * Express handler for GET /api/github-app/repositories
- */
 export const getConnectedRepositories = async (req, res) => {
   const userId = req.user?.id;
 
   try {
+    // Query active connected repositories (Step 6)
+    const activeConnQuery = await pool.query(
+      `SELECT repository_name, status FROM connected_repositories WHERE user_id = $1`,
+      [userId]
+    );
+    const activeSet = new Set(activeConnQuery.rows.map(r => r.repository_name));
+
     const instRes = await pool.query(`SELECT * FROM github_installations WHERE user_id = $1`, [userId]);
     let allRepos = [];
 
@@ -385,15 +389,21 @@ export const getConnectedRepositories = async (req, res) => {
         const { data: reposData } = await octokit.apps.listReposAccessibleToInstallation();
         const repos = reposData.repositories || [];
 
-        const mapped = repos.map(r => ({
-          id: r.id,
-          name: r.name,
-          full_name: r.full_name,
-          private: r.private,
-          owner: r.owner.login,
-          installation_id: inst.installation_id,
-          account_login: inst.account_login
-        }));
+        const mapped = repos.map(r => {
+          const isConnected = activeSet.has(r.full_name);
+          return {
+            id: r.id,
+            name: r.name,
+            full_name: r.full_name,
+            private: r.private,
+            owner: r.owner.login,
+            installation_id: inst.installation_id,
+            account_login: inst.account_login,
+            connected: isConnected,
+            webhook_active: isConnected,
+            organization: inst.account_type === 'Organization' ? inst.account_login : null
+          };
+        });
 
         allRepos = [...allRepos, ...mapped];
 
@@ -404,15 +414,21 @@ export const getConnectedRepositories = async (req, res) => {
         
         // Return cached list
         const cached = inst.repositories || [];
-        const mapped = cached.map(r => ({
-          id: r.id,
-          name: r.name,
-          full_name: r.full_name,
-          private: r.private,
-          owner: r.owner?.login || inst.account_login,
-          installation_id: inst.installation_id,
-          account_login: inst.account_login
-        }));
+        const mapped = cached.map(r => {
+          const isConnected = activeSet.has(r.full_name);
+          return {
+            id: r.id,
+            name: r.name,
+            full_name: r.full_name,
+            private: r.private,
+            owner: r.owner?.login || inst.account_login,
+            installation_id: inst.installation_id,
+            account_login: inst.account_login,
+            connected: isConnected,
+            webhook_active: isConnected,
+            organization: inst.account_type === 'Organization' ? inst.account_login : null
+          };
+        });
         allRepos = [...allRepos, ...mapped];
       }
     }
@@ -655,6 +671,61 @@ export const getInstallationStatus = async (req, res) => {
   } catch (err) {
     console.error('❌ [Installation Status Check Error]', err.message);
     res.status(500).json({ error: 'Failed to retrieve installation status: ' + err.message });
+  }
+};
+
+/**
+ * Express handler for POST /api/github-app/repositories/connect
+ */
+export const connectRepository = async (req, res) => {
+  const { repository_name, repo_name } = req.body;
+  const userId = req.user?.id;
+
+  if (!repository_name || !repo_name) {
+    return res.status(400).json({ error: 'repository_name and repo_name are required.' });
+  }
+
+  try {
+    console.log(`🔌 [GitHub App Connect Repo] Syncing repository ${repository_name} for user_id ${userId}...`);
+
+    await pool.query(
+      `INSERT INTO connected_repositories (user_id, repository_name, repo_name, status)
+       VALUES ($1, $2, $3, 'active')
+       ON CONFLICT (user_id, repository_name)
+       DO UPDATE SET status = 'active'`,
+      [userId, repository_name, repo_name]
+    );
+
+    res.status(200).json({ success: true, message: `Repository ${repository_name} synced successfully.` });
+  } catch (err) {
+    console.error('❌ [Connect Repo Error]', err.message);
+    res.status(500).json({ error: 'Failed to connect repository: ' + err.message });
+  }
+};
+
+/**
+ * Express handler for POST /api/github-app/repositories/disconnect
+ */
+export const disconnectRepository = async (req, res) => {
+  const { repository_name } = req.body;
+  const userId = req.user?.id;
+
+  if (!repository_name) {
+    return res.status(400).json({ error: 'repository_name is required.' });
+  }
+
+  try {
+    console.log(`🔌 [GitHub App Disconnect Repo] Removing repository ${repository_name} for user_id ${userId}...`);
+
+    await pool.query(
+      `DELETE FROM connected_repositories WHERE user_id = $1 AND repository_name = $2`,
+      [userId, repository_name]
+    );
+
+    res.status(200).json({ success: true, message: `Repository ${repository_name} disconnected successfully.` });
+  } catch (err) {
+    console.error('❌ [Disconnect Repo Error]', err.message);
+    res.status(500).json({ error: 'Failed to disconnect repository: ' + err.message });
   }
 };
 

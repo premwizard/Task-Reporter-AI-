@@ -16,6 +16,7 @@ const ConnectRepos = () => {
   const [installedStatus, setInstalledStatus] = useState(null); // Step 7
   const [binding, setBinding] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [filterType, setFilterType] = useState('all'); // Tab filter for repositories
   const [installUrl, setInstallUrl] = useState('');
   const [refreshingId, setRefreshingId] = useState(null);
   const [disconnectingId, setDisconnectingId] = useState(null);
@@ -85,12 +86,26 @@ const ConnectRepos = () => {
     initialize();
   }, []);
 
-  // Filter repos based on query
-  const filteredRepos = repos.filter(repo => 
-    repo.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    repo.owner.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    repo.account_login.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Filter repos based on query and filter tab (Step 10 & 11)
+  const filteredRepos = repos.filter(repo => {
+    const matchesSearch = 
+      repo.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      repo.owner.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      repo.account_login.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (repo.organization && repo.organization.toLowerCase().includes(searchQuery.toLowerCase()));
+
+    if (!matchesSearch) return false;
+
+    if (filterType === 'personal') return !repo.organization;
+    if (filterType === 'organization') return !!repo.organization;
+    if (filterType === 'private') return repo.private;
+    if (filterType === 'public') return !repo.private;
+
+    return true;
+  });
+
+  const filteredConnected = filteredRepos.filter(r => r.connected);
+  const filteredAvailable = filteredRepos.filter(r => !r.connected);
 
   // Trigger cache refresh
   const handleRefresh = async (instId, dbId) => {
@@ -123,6 +138,32 @@ const ConnectRepos = () => {
       toast.error('Failed to remove integration: ' + err.message, { id: toastId });
     } finally {
       setDisconnectingId(null);
+    }
+  };
+
+  // Sync / Track toggle handler for individual repositories (Step 9)
+  const handleToggleConnect = async (repo, shouldConnect) => {
+    const toastId = toast.loading(shouldConnect ? `Syncing repository ${repo.name}...` : `Disconnecting repository ${repo.name}...`);
+    try {
+      if (shouldConnect) {
+        await api.post('/github-app/repositories/connect', { 
+          repository_name: repo.full_name, 
+          repo_name: repo.name 
+        });
+        toast.success(`Repository ${repo.name} connected successfully!`, { id: toastId, duration: 3000 });
+      } else {
+        if (!window.confirm(`Are you sure you want to stop tracking commits for ${repo.name}?`)) {
+          toast.dismiss(toastId);
+          return;
+        }
+        await api.post('/github-app/repositories/disconnect', { 
+          repository_name: repo.full_name 
+        });
+        toast.success(`Repository ${repo.name} disconnected successfully.`, { id: toastId, duration: 3000 });
+      }
+      await fetchData(true);
+    } catch (err) {
+      toast.error(`Operation failed: ${err.message}`, { id: toastId, duration: 4000 });
     }
   };
 
@@ -378,70 +419,194 @@ const ConnectRepos = () => {
             </div>
 
             {/* Repositories Management Grid */}
-            <div className="space-y-4">
-              <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-                <h2 className="text-xl font-bold text-slate-900 dark:text-white mr-auto">Connected Repositories</h2>
-                
-                <div className="relative w-full sm:max-w-md">
-                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-zinc-500" />
-                  <input 
-                    type="text" 
-                    placeholder="Search connected repositories..." 
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    className="input-premium pl-9 w-full bg-slate-100/50 dark:bg-zinc-900/50"
-                  />
+            <div className="space-y-6">
+              {/* Header with Search and Filters */}
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-xl font-bold text-slate-900 dark:text-white">Repository Tracking</h2>
+                    <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">
+                      Manage repositories tracked by GitIntel. Connect available workspaces to track commit summaries and daily analytics.
+                    </p>
+                  </div>
+                  
+                  <div className="relative w-full sm:max-w-xs">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-zinc-500" />
+                    <input 
+                      type="text" 
+                      placeholder="Search repositories..." 
+                      value={searchQuery}
+                      onChange={e => setSearchQuery(e.target.value)}
+                      className="input-premium pl-9 w-full bg-slate-100/50 dark:bg-zinc-900/50"
+                    />
+                  </div>
+                </div>
+
+                {/* Filter pills */}
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { id: 'all', label: 'All Repositories' },
+                    { id: 'personal', label: 'Personal Workspaces' },
+                    { id: 'organization', label: 'Organization Workspaces' },
+                    { id: 'private', label: 'Private Repos' },
+                    { id: 'public', label: 'Public Repos' }
+                  ].map(tab => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setFilterType(tab.id)}
+                      className={`px-3 py-1 rounded-full text-xs font-semibold border transition-all cursor-pointer ${
+                        filterType === tab.id
+                          ? 'bg-violet-500/10 text-violet-500 border-violet-500/30'
+                          : 'bg-transparent text-slate-500 dark:text-zinc-400 border-slate-200 dark:border-zinc-800 hover:border-slate-350'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              {filteredRepos.length === 0 ? (
-                <div className="glass-card p-12 text-center flex flex-col items-center justify-center">
-                  <FolderGit2 className="w-8 h-8 text-slate-450 mb-3" />
-                  <p className="text-sm font-semibold text-slate-500 dark:text-zinc-400">No repositories match your filter query.</p>
+              {/* Connected Repositories Section */}
+              <div className="space-y-4 pt-4 border-t border-slate-100 dark:border-zinc-800/60">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Connected Workspaces ({filteredConnected.length})
+                  </h3>
                 </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                  {filteredRepos.map(repo => (
-                    <div 
-                      key={`${repo.installation_id}-${repo.id}`}
-                      className="glass-card p-5 flex flex-col justify-between border-slate-200 dark:border-zinc-800/60"
-                    >
-                      <div className="space-y-3">
-                        <div className="flex items-center gap-2">
-                          <FolderGit2 className="w-5 h-5 text-emerald-500 flex-shrink-0" />
-                          <h3 className="font-bold text-sm text-slate-900 dark:text-white truncate" title={repo.full_name}>
-                            {repo.name}
-                          </h3>
+
+                {filteredConnected.length === 0 ? (
+                  <div className="glass-card p-8 text-center flex flex-col items-center justify-center border-dashed border-slate-200 dark:border-zinc-800">
+                    <FolderGit2 className="w-8 h-8 text-slate-400 dark:text-zinc-650 mb-2" />
+                    <p className="text-xs font-semibold text-slate-500 dark:text-zinc-400">No active tracking for matched workspaces. Connect repos from the list below to enable summaries.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                    {filteredConnected.map(repo => (
+                      <div 
+                        key={`${repo.installation_id}-${repo.id}`}
+                        className="glass-card p-5 flex flex-col justify-between border-emerald-500/20 bg-emerald-500/[0.01]"
+                      >
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <FolderGit2 className="w-4.5 h-4.5 text-emerald-500 flex-shrink-0" />
+                              <h4 className="font-extrabold text-sm text-slate-900 dark:text-white truncate" title={repo.full_name}>
+                                {repo.name}
+                              </h4>
+                            </div>
+                            <span className="bg-emerald-500/10 text-emerald-500 text-[9px] font-extrabold px-2 py-0.5 rounded border border-emerald-500/20 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Active
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2 text-[10px] font-semibold text-slate-500 dark:text-zinc-400">
+                            <span className="bg-slate-100 dark:bg-zinc-850 px-2 py-0.5 rounded border border-slate-200/50 dark:border-zinc-800">
+                              owner: @{repo.owner}
+                            </span>
+                            {repo.organization && (
+                              <>
+                                <span className="text-slate-300 dark:text-zinc-700">|</span>
+                                <span className="flex items-center gap-1">
+                                  <Building2 className="w-3 h-3 text-violet-400" /> {repo.organization}
+                                </span>
+                              </>
+                            )}
+                          </div>
                         </div>
 
-                        <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-500 dark:text-zinc-400">
-                          <span className="bg-slate-100 dark:bg-zinc-800/70 px-2 py-0.5 rounded border border-slate-200/50 dark:border-zinc-800">
-                            owner: @{repo.owner}
+                        <div className="border-t border-slate-100 dark:border-zinc-800/60 pt-3 mt-4 flex items-center justify-between">
+                          <span className={`text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded ${
+                            repo.private 
+                              ? 'bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-400 border border-rose-200/20' 
+                              : 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-400 border border-indigo-200/20'
+                          }`}>
+                            {repo.private ? 'Private' : 'Public'}
                           </span>
-                          <span className="text-slate-300 dark:text-zinc-700">|</span>
-                          <span className="flex items-center gap-1">
-                            <Building2 className="w-3 h-3 text-violet-400" /> {repo.account_login}
-                          </span>
+
+                          <button
+                            onClick={() => handleToggleConnect(repo, false)}
+                            className="text-xs font-bold text-rose-500 hover:text-rose-600 dark:hover:text-rose-400 flex items-center gap-1 cursor-pointer border-transparent cursor-pointer bg-transparent"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" /> Disconnect
+                          </button>
                         </div>
                       </div>
+                    ))}
+                  </div>
+                )}
+              </div>
 
-                      <div className="border-t border-slate-105/30 dark:border-zinc-805/30 pt-3 mt-4 flex items-center justify-between">
-                        <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${
-                          repo.private 
-                            ? 'bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-400 border border-rose-200/20' 
-                            : 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-400 border border-indigo-200/20'
-                        }`}>
-                          {repo.private ? 'Private' : 'Public'}
-                        </span>
-
-                        <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                          <CheckCircle2 className="w-3.5 h-3.5 fill-emerald-500/10 stroke-[2.5]" /> Sync Active
-                        </span>
-                      </div>
-                    </div>
-                  ))}
+              {/* Available Repositories Section */}
+              <div className="space-y-4 pt-6 border-t border-slate-100 dark:border-zinc-800/60">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-slate-400 dark:bg-zinc-650"></span>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Available Workspaces ({filteredAvailable.length})
+                  </h3>
                 </div>
-              )}
+
+                {filteredAvailable.length === 0 ? (
+                  <div className="glass-card p-8 text-center flex flex-col items-center justify-center">
+                    <Check className="w-8 h-8 text-emerald-500 mb-2" />
+                    <p className="text-xs font-semibold text-slate-500 dark:text-zinc-400">All available workspaces connected successfully.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                    {filteredAvailable.map(repo => (
+                      <div 
+                        key={`${repo.installation_id}-${repo.id}`}
+                        className="glass-card p-5 flex flex-col justify-between border-slate-200 dark:border-zinc-800/60"
+                      >
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <FolderGit2 className="w-4.5 h-4.5 text-slate-400 dark:text-zinc-500 flex-shrink-0" />
+                              <h4 className="font-extrabold text-sm text-slate-900 dark:text-white truncate" title={repo.full_name}>
+                                {repo.name}
+                              </h4>
+                            </div>
+                            <span className="bg-slate-100 text-slate-500 dark:bg-zinc-800 dark:text-zinc-400 text-[9px] font-extrabold px-2 py-0.5 rounded border border-slate-200/50 dark:border-zinc-700/30">
+                              Available
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2 text-[10px] font-semibold text-slate-500 dark:text-zinc-400">
+                            <span className="bg-slate-100 dark:bg-zinc-850 px-2 py-0.5 rounded border border-slate-200/50 dark:border-zinc-800">
+                              owner: @{repo.owner}
+                            </span>
+                            {repo.organization && (
+                              <>
+                                <span className="text-slate-300 dark:text-zinc-700">|</span>
+                                <span className="flex items-center gap-1">
+                                  <Building2 className="w-3 h-3 text-violet-400" /> {repo.organization}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="border-t border-slate-105/30 dark:border-zinc-805/30 pt-3 mt-4 flex items-center justify-between">
+                          <span className={`text-[9px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded ${
+                            repo.private 
+                              ? 'bg-rose-50 text-rose-700 dark:bg-rose-500/10 dark:text-rose-400 border border-rose-200/20' 
+                              : 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/10 dark:text-indigo-400 border border-indigo-200/20'
+                          }`}>
+                            {repo.private ? 'Private' : 'Public'}
+                          </span>
+
+                          <button
+                            onClick={() => handleToggleConnect(repo, true)}
+                            className="text-xs font-bold text-violet-600 hover:text-violet-750 dark:text-violet-400 dark:hover:text-violet-300 flex items-center gap-1 cursor-pointer border-transparent bg-transparent"
+                          >
+                            <Zap className="w-3.5 h-3.5 fill-violet-500/10" /> Sync Repo
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </motion.div>
         )}

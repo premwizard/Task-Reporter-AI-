@@ -8,7 +8,9 @@ import {
   refreshInstallation,
   removeIntegration,
   getInstallationStatus,
-  handleSetupRedirect
+  handleSetupRedirect,
+  connectRepository,
+  disconnectRepository
 } from '../controllers/githubAppController.js';
 
 const router = express.Router();
@@ -25,6 +27,8 @@ router.get('/installation-status', authenticateToken, getInstallationStatus);
 router.get('/setup', handleSetupRedirect); // GitHub redirects here after install
 router.post('/bind', authenticateToken, bindInstallation);
 router.get('/repositories', authenticateToken, getConnectedRepositories);
+router.post('/repositories/connect', authenticateToken, connectRepository);
+router.post('/repositories/disconnect', authenticateToken, disconnectRepository);
 router.get('/installations', authenticateToken, getUserInstallations);
 router.post('/installations/:id/refresh', authenticateToken, refreshInstallation);
 router.delete('/installations/:id', authenticateToken, removeIntegration);
