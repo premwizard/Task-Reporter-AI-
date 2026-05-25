@@ -12,6 +12,8 @@ const ConnectRepos = () => {
   const [installations, setInstallations] = useState([]);
   const [repos, setRepos] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [statusLoading, setStatusLoading] = useState(true); // Step 10
+  const [installedStatus, setInstalledStatus] = useState(null); // Step 7
   const [binding, setBinding] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [installUrl, setInstallUrl] = useState('');
@@ -46,7 +48,10 @@ const ConnectRepos = () => {
 
   // 2. Fetch installations and connected repos
   const fetchData = async (quiet = false) => {
-    if (!quiet) setLoading(true);
+    if (!quiet) {
+      setLoading(true);
+      setStatusLoading(true);
+    }
     try {
       // Fetch installations list
       const instData = await api.get('/github-app/installations');
@@ -59,11 +64,16 @@ const ConnectRepos = () => {
       // Fetch pre-configured install URL
       const urlData = await api.get('/github-app/install-url');
       setInstallUrl(urlData.install_url);
+
+      // Fetch GitHub App status (Step 7)
+      const statusData = await api.get('/github-app/status');
+      setInstalledStatus(statusData);
     } catch (err) {
       console.error('Failed to load GitHub integration data:', err);
       toast.error('Error synchronizing integrations: ' + err.message);
     } finally {
       setLoading(false);
+      setStatusLoading(false);
     }
   };
 
@@ -171,14 +181,21 @@ const ConnectRepos = () => {
               We are connecting your GitHub App installation and caching repository indexes. This will only take a second.
             </p>
           </motion.div>
-        ) : loading ? (
-          // General skeleton loading state
-          <div className="space-y-6">
-            <div className="h-40 glass-card animate-shimmer"></div>
-            <div className="h-60 glass-card animate-shimmer"></div>
-          </div>
-        ) : installations.length === 0 ? (
-          // Step 9: Onboarding screen - Install App Button
+        ) : (statusLoading || loading) ? (
+          // General skeleton loading state (Step 10)
+          <motion.div 
+            initial={{ opacity: 0 }} 
+            animate={{ opacity: 1 }} 
+            exit={{ opacity: 0 }}
+            className="glass-card p-16 text-center flex flex-col items-center justify-center border-zinc-800"
+          >
+            <div className="flex flex-col items-center gap-4 animate-pulse">
+              <RefreshCw className="w-10 h-10 text-violet-500 animate-spin" />
+              <h3 className="text-xs font-bold text-zinc-450 uppercase tracking-widest">Checking GitHub installation...</h3>
+            </div>
+          </motion.div>
+        ) : (!installedStatus?.installed || installations.length === 0) ? (
+          // Step 8 & 9: Onboarding screen - Install App Button
           <motion.div 
             initial={{ opacity: 0, y: 15 }} 
             animate={{ opacity: 1, y: 0 }}
