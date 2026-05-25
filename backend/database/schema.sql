@@ -104,6 +104,8 @@ CREATE TABLE IF NOT EXISTS github_installations (
     account_login VARCHAR(255) NOT NULL,
     account_type VARCHAR(50) NOT NULL,
     repositories JSONB DEFAULT '[]'::jsonb,
+    github_username VARCHAR(255),
+    installed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_github_installations_user_id ON github_installations(user_id);
@@ -129,6 +131,11 @@ CREATE TABLE IF NOT EXISTS pull_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_pull_requests_author ON pull_requests(author);
 CREATE INDEX IF NOT EXISTS idx_pull_requests_repo ON pull_requests(repository_name);
+
+-- 10. Schema Migrations for Installations Columns
+ALTER TABLE github_installations ADD COLUMN IF NOT EXISTS github_username VARCHAR(255);
+ALTER TABLE github_installations ADD COLUMN IF NOT EXISTS installed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+
 
 
 
