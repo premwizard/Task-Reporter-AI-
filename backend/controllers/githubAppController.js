@@ -513,12 +513,25 @@ export const removeIntegration = async (req, res) => {
 
 /**
  * Express handler for GET /api/pull-requests
+ * Scoped to the authenticated user (admin sees all)
  */
 export const getPullRequests = async (req, res) => {
+  const userId = req.user?.id;
+  const userRole = req.user?.role;
+  const username = req.user?.github_username;
+  console.log(`🔍 [PR Fetch] user_id=${userId} role=${userRole} username=${username}`);
   try {
-    const result = await pool.query(
-      `SELECT * FROM pull_requests ORDER BY created_at DESC`
-    );
+    let query, params;
+    if (userRole === 'admin') {
+      // Admins see all pull requests
+      query = `SELECT * FROM pull_requests ORDER BY created_at DESC`;
+      params = [];
+    } else {
+      // Normal users see only PRs they own (by user_id OR matching author/username)
+      query = `SELECT * FROM pull_requests WHERE (user_id = $1 OR author = $2) ORDER BY created_at DESC`;
+      params = [userId, username];
+    }
+    const result = await pool.query(query, params);
     res.status(200).json(result.rows);
   } catch (err) {
     console.error('Error fetching PRs:', err);
@@ -528,18 +541,24 @@ export const getPullRequests = async (req, res) => {
 
 /**
  * Express handler for GET /api/pull-requests/:id
+ * Verifies ownership: normal users can only access their own PRs
  */
 export const getPullRequestById = async (req, res) => {
   const { id } = req.params;
+  const userId = req.user?.id;
+  const userRole = req.user?.role;
+  const username = req.user?.github_username;
   try {
-    const result = await pool.query(
-      `SELECT * FROM pull_requests WHERE id = $1`,
-      [id]
-    );
+    const result = await pool.query(`SELECT * FROM pull_requests WHERE id = $1`, [id]);
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Pull request not found.' });
     }
-    res.status(200).json(result.rows[0]);
+    const pr = result.rows[0];
+    // Ownership check for non-admins
+    if (userRole !== 'admin' && pr.user_id !== userId && pr.author !== username) {
+      return res.status(403).json({ error: 'Access denied: You do not own this pull request.' });
+    }
+    res.status(200).json(pr);
   } catch (err) {
     console.error('Error fetching PR by ID:', err);
     res.status(500).json({ error: 'Failed to fetch pull request: ' + err.message });
@@ -548,14 +567,29 @@ export const getPullRequestById = async (req, res) => {
 
 /**
  * Express handler for GET /api/pull-requests/user/:username
+ * Non-admins can only view their OWN username PRs
  */
 export const getPullRequestsByUsername = async (req, res) => {
   const { username } = req.params;
+  const userId = req.user?.id;
+  const userRole = req.user?.role;
+  const authUsername = req.user?.github_username;
+
+  // Security: non-admins can only query their own username
+  if (userRole !== 'admin' && username !== authUsername) {
+    return res.status(403).json({ error: 'Access denied: You can only view your own pull requests.' });
+  }
+
   try {
-    const result = await pool.query(
-      `SELECT * FROM pull_requests WHERE author = $1 ORDER BY created_at DESC`,
-      [username]
-    );
+    let query, params;
+    if (userRole === 'admin') {
+      query = `SELECT * FROM pull_requests WHERE author = $1 ORDER BY created_at DESC`;
+      params = [username];
+    } else {
+      query = `SELECT * FROM pull_requests WHERE (user_id = $1 OR author = $2) ORDER BY created_at DESC`;
+      params = [userId, authUsername];
+    }
+    const result = await pool.query(query, params);
     res.status(200).json(result.rows);
   } catch (err) {
     console.error('Error fetching PR by username:', err);
@@ -565,13 +599,22 @@ export const getPullRequestsByUsername = async (req, res) => {
 
 /**
  * Express handler for POST /api/pull-requests/:id/ai-summary
+ * Verifies PR ownership before generating AI summary
  */
 export const getPRSummary = async (req, res) => {
   const { id } = req.params;
+  const userId = req.user?.id;
+  const userRole = req.user?.role;
+  const username = req.user?.github_username;
   try {
     const result = await pool.query(`SELECT * FROM pull_requests WHERE id = $1`, [id]);
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Pull request not found.' });
+    }
+    const pr = result.rows[0];
+    // Ownership check for non-admins
+    if (userRole !== 'admin' && pr.user_id !== userId && pr.author !== username) {
+      return res.status(403).json({ error: 'Access denied: You do not own this pull request.' });
     }
 
     const pr = result.rows[0];
