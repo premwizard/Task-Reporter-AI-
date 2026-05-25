@@ -14,6 +14,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import api from './services/api';
 import { getBackendBaseUrl } from './lib/api';
 import toast, { Toaster } from 'react-hot-toast';
+import DiagnosticPanel from './components/DiagnosticPanel';
 
 // STEP 6 & 21: Lazy load pages with graceful suspense fallbacks
 const Login = React.lazy(() => import('./pages/Login'));
@@ -1001,6 +1002,9 @@ function MainAppContent() {
       <AnimatePresence>
         {editTarget && <EditModal activity={editTarget} onClose={() => setEditTarget(null)} onSaved={() => { setEditTarget(null); fetchData(); }} />}
       </AnimatePresence>
+
+      {/* Diagnostics Monitor Panel */}
+      <DiagnosticPanel />
     </div>
   );
 }

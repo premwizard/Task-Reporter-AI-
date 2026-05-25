@@ -108,20 +108,75 @@ export const getAllTasks = async (req, res) => {
   }
 };
 
-// GET /api/admin/employees (Admin Only)
+// GET /api/admin/employees (Admin Only) & GET /api/admin/users
 export const getEmployees = async (req, res) => {
   try {
-    const query = `
-      SELECT e.id, e.first_name, e.last_name, e.email, e.role, e.department_id, e.whatsapp_number, e.created_at,
-             d.name as department_name
-      FROM employees e
-      LEFT JOIN departments d ON e.department_id = d.id
-      ORDER BY e.first_name ASC, e.last_name ASC
-    `;
-    const result = await db.query(query);
-    return res.status(200).json(result.rows);
+    let usersList = [];
+    try {
+      const usersRes = await db.query(`
+        SELECT id, first_name, last_name, email, role, github_username, github_avatar, created_at 
+        FROM users 
+        ORDER BY first_name ASC, last_name ASC
+      `);
+      usersList = usersRes.rows;
+    } catch (usersErr) {
+      console.warn("⚠️ Failed to select from users table:", usersErr.message);
+    }
+
+    let employeesList = [];
+    try {
+      const empRes = await db.query(`
+        SELECT id, first_name, last_name, email, role, created_at 
+        FROM employees 
+        ORDER BY first_name ASC, last_name ASC
+      `);
+      employeesList = empRes.rows;
+    } catch (empErr) {
+      console.warn("⚠️ Employees table not available or empty:", empErr.message);
+    }
+
+    // Combine lists, avoiding duplicates by email
+    const seenEmails = new Set();
+    const combined = [];
+
+    for (const u of usersList) {
+      const emailVal = u.email || u.github_email || '';
+      if (emailVal) {
+        seenEmails.add(emailVal.toLowerCase());
+      }
+      combined.push({
+        id: u.id,
+        first_name: u.first_name || u.github_username || 'GitHub',
+        last_name: u.last_name || 'User',
+        email: emailVal,
+        role: u.role || 'developer',
+        github_username: u.github_username,
+        github_avatar: u.github_avatar,
+        created_at: u.created_at
+      });
+    }
+
+    for (const e of employeesList) {
+      if (e.email) {
+        const emailKey = e.email.toLowerCase();
+        if (seenEmails.has(emailKey)) continue;
+        seenEmails.add(emailKey);
+      }
+      combined.push({
+        id: e.id,
+        first_name: e.first_name || 'Employee',
+        last_name: e.last_name || 'User',
+        email: e.email || '',
+        role: e.role || 'developer',
+        github_username: null,
+        github_avatar: null,
+        created_at: e.created_at
+      });
+    }
+
+    return res.status(200).json(combined);
   } catch (err) {
-    console.error('Error fetching admin employees list:', err);
+    console.error('Error fetching admin employees/users list:', err);
     return res.status(500).json({ error: 'Internal server error fetching employees' });
   }
 };
