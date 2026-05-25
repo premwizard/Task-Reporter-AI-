@@ -78,7 +78,12 @@ const WebhookMonitor = () => {
           `🔥 [PUSH RECEIVED] Repo: "${activity.repository_name}" | Committer: "${activity.employee_name}" | Msg: "${activity.activity}" | SHA: ${activity.commit_hash?.substring(0, 7) || 'N/A'}`,
           'success'
         );
-        // Refresh local connected repos list to update timestamps
+        fetchConnectedRepos();
+      } else if (activity.source === 'github_events') {
+        addLog(
+          `🌐 [ACTIVITY API] Repo: "${activity.repository_name}" | Committer: "${activity.employee_name}" | Msg: "${activity.activity}" | SHA: ${activity.commit_hash?.substring(0, 7) || 'N/A'}`,
+          'info'
+        );
         fetchConnectedRepos();
       }
     });

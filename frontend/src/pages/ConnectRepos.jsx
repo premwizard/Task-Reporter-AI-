@@ -24,6 +24,24 @@ const ConnectRepos = () => {
   const [filterType, setFilterType] = useState('all');
   const [refreshingId, setRefreshingId] = useState(null);
   const [togglingRepo, setTogglingRepo] = useState(null);
+  const [syncingActivity, setSyncingActivity] = useState(false);
+
+  const handleSyncActivity = async () => {
+    setSyncingActivity(true);
+    const tid = toast.loading('🌐 Querying GitHub Events API for recent contributions...');
+    try {
+      const { data } = await api.post('/github-app/sync-activity');
+      if (data.success) {
+        toast.success(`Contribution sync complete! ${data.inserted} new activities added, ${data.skipped} skipped.`, { id: tid });
+      } else {
+        toast.error('Sync completed with warnings.', { id: tid });
+      }
+    } catch (err) {
+      toast.error('Sync failed: ' + err.message, { id: tid });
+    } finally {
+      setSyncingActivity(false);
+    }
+  };
 
   const handleUrlBinding = async () => {
     const params = new URLSearchParams(window.location.search);
@@ -276,7 +294,11 @@ const ConnectRepos = () => {
         <div className="flex items-center gap-3 flex-shrink-0">
           <button onClick={() => fetchData()} disabled={loading} className="btn-secondary flex items-center gap-2">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
+            Refresh List
+          </button>
+          <button onClick={handleSyncActivity} disabled={syncingActivity} className="btn-secondary flex items-center gap-2 border-amber-500/30 text-amber-600 hover:bg-amber-500/5">
+            <Globe className={`w-4 h-4 ${syncingActivity ? 'animate-spin' : ''}`} />
+            Sync Commits
           </button>
           {installUrl && (
             <a href={installUrl} target="_blank" rel="noopener noreferrer"

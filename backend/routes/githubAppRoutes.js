@@ -59,4 +59,16 @@ router.get('/install-url/org/:org', authenticateToken, (req, res) => {
   });
 });
 
+// Sync GitHub Events API for current user immediately
+import { syncUserGitHubActivity } from '../services/githubEventsService.js';
+router.post('/sync-activity', authenticateToken, async (req, res) => {
+  const userId = req.user?.id;
+  try {
+    const stats = await syncUserGitHubActivity(userId);
+    res.status(200).json({ success: true, ...stats });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to sync activity: ' + err.message });
+  }
+});
+
 export default router;

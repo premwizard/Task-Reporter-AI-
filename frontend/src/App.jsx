@@ -8,7 +8,7 @@ import {
   Github, Edit3, Trash2, X, RefreshCw, Search,
   Sparkles, Copy, CheckCircle, ChevronDown, Bot,
   LayoutGrid, List, MessageSquare, Bell, UserCircle, Menu,
-  FileSpreadsheet, Link2, Key, GitPullRequest
+  FileSpreadsheet, Link2, Key, GitPullRequest, Globe, Zap
 } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import api from './services/api';
@@ -68,16 +68,23 @@ class ErrorBoundary extends React.Component {
 
 const SourceBadge = React.memo(({ source }) => {
   const styles = {
-    github: 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-zinc-800 dark:text-zinc-300 dark:border-zinc-700',
+    github: 'bg-violet-50 text-violet-750 border-violet-200 dark:bg-violet-500/10 dark:text-violet-400 dark:border-violet-500/20',
+    github_events: 'bg-amber-50 text-amber-750 border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20',
     manual: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20',
   };
   const Icons = {
-    github: <Github className="w-3.5 h-3.5" />,
+    github: <Zap className="w-3.5 h-3.5" />,
+    github_events: <Globe className="w-3.5 h-3.5" />,
     manual: <FileText className="w-3.5 h-3.5" />
+  };
+  const labels = {
+    github: 'Webhook',
+    github_events: 'GitHub Activity',
+    manual: 'Manual'
   };
   return (
     <span className={`badge-premium flex items-center gap-1.5 w-fit ${styles[source] || styles.manual}`}>
-      {Icons[source] || Icons.manual} {source}
+      {Icons[source] || Icons.manual} {labels[source] || source}
     </span>
   );
 });
