@@ -13,11 +13,9 @@ import activityRoutes from './routes/activityRoutes.js';
 import exportRoutes from './routes/exportRoutes.js';
 import summaryRoutes from './routes/summaryRoutes.js';
 import reportRoutes from './routes/reportRoutes.js';
-import authRoutes from './routes/authRoutes.js';
-import githubRoutes from './routes/githubRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
+import authRoutes from './routes/authRoutes.js';
 import employeeRoutes from './routes/employeeRoutes.js';
-import whatsappRoutes from './routes/whatsappRoutes.js';
 import taskRoutes from './routes/taskRoutes.js';
 import githubAppRoutes from './routes/githubAppRoutes.js';
 import pullRequestRoutes from './routes/pullRequestRoutes.js';
@@ -149,14 +147,12 @@ app.use('/api/webhooks', webhookRoutes);
 app.use('/api/webhook', webhookRoutes);
 
 // Protected APIs
-app.use('/api/github', githubRoutes);
 app.use('/api/activities', activityRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/ai-summary', summaryRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api', employeeRoutes);
-app.use('/api/whatsapp', whatsappRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/github-app', githubAppRoutes);
 app.use('/api/pull-requests', pullRequestRoutes);

@@ -1,5 +1,4 @@
 import { pool } from '../config/db.js';
-import { sendTaskUpdate } from '../services/whatsappService.js';
 
 export const getTasks = async (req, res) => {
     try {
@@ -26,9 +25,6 @@ export const createTask = async (req, res) => {
         );
         
         const newTask = result.rows[0];
-
-        // 2. Send WhatsApp Message (Non-blocking)
-        sendTaskUpdate(newTask).catch(err => console.error('WhatsApp message failed', err));
 
         res.status(201).json(newTask);
     } catch (error) {

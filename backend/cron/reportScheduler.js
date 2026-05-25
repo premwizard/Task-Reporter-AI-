@@ -1,15 +1,9 @@
 import cron from 'node-cron';
 import { pool } from '../database/db.js';
 import { generateAISummary } from '../services/aiService.js';
-import { generateAndSendDailyReport } from '../services/reportService.js';
 import { syncAllUsersActivity } from '../services/githubEventsService.js';
 
 export const initCronJobs = () => {
-    // 1. WhatsApp Daily Report at 6:00 PM
-    cron.schedule('0 18 * * *', () => {
-        console.log('Executing scheduled daily WhatsApp report...');
-        generateAndSendDailyReport();
-    });
 
     // Helper to auto-generate AI report directly without localhost HTTP loopbacks
     const autoGenerateAIReport = async (type) => {
@@ -91,5 +85,5 @@ export const initCronJobs = () => {
         }
     }, 12000);
 
-    console.log('✅ Cron scheduler initialized. AI reports, WhatsApp & GitHub Events sync (every 5 min) scheduled.');
+    console.log('✅ Cron scheduler initialized. AI reports & GitHub Events sync (every 5 min) scheduled.');
 };

@@ -24,9 +24,10 @@ CREATE TABLE activities (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
     employee_name VARCHAR(150) NOT NULL,
-    source VARCHAR(50) NOT NULL CHECK (source IN ('github', 'excel', 'manual')),
+    source VARCHAR(50) NOT NULL CHECK (source IN ('github', 'github_events', 'excel', 'manual')),
     activity TEXT NOT NULL,
     repository_name VARCHAR(150),
+    branch VARCHAR(255),
     commit_hash VARCHAR(100) UNIQUE, -- Prevent duplicate github commits
     ai_summary TEXT, -- Stores AI translation/insight of single commit
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP

@@ -20,7 +20,6 @@ import DiagnosticPanel from './components/DiagnosticPanel';
 const Login = React.lazy(() => import('./pages/Login'));
 const Register = React.lazy(() => import('./pages/Register'));
 const ConnectRepos = React.lazy(() => import('./pages/ConnectRepos'));
-const WhatsAppSetup = React.lazy(() => import('./pages/WhatsAppSetup'));
 const AIReports = React.lazy(() => import('./pages/AIReports'));
 const WebhookMonitor = React.lazy(() => import('./pages/WebhookMonitor'));
 const OAuthSuccess = React.lazy(() => import('./pages/OAuthSuccess'));
@@ -765,7 +764,6 @@ function MainAppContent() {
               <p className="text-xs font-semibold text-zinc-400">Loading module resources...</p>
             </div>
           }>
-            {activeTab === 'whatsapp' && <WhatsAppSetup />}
             {activeTab === 'analytics' && <AIReports />}
             {activeTab === 'connect-repos' && <ConnectRepos />}
             {activeTab === 'webhook-debug' && <WebhookMonitor />}
