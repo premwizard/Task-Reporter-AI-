@@ -12,10 +12,12 @@ export const AuthProvider = ({ children }) => {
     try {
       const userData = await api.get('/auth/me');
       setUser(userData);
+      return userData;
     } catch (err) {
       console.log('[AuthContext] Session verification failed (not logged in)');
       localStorage.removeItem('token');
       setUser(null);
+      throw err;
     } finally {
       setLoading(false);
     }

@@ -31,7 +31,7 @@ router.post('/github', handleGithubWebhook);
 
 // GET /api/webhooks/test -> Diagnostic endpoint
 router.get('/test', (req, res) => {
-  const backendUrl = (process.env.BACKEND_URL || 'http://localhost:5000').trim();
+  const backendUrl = (process.env.BACKEND_URL || 'https://task-reporter-ai.onrender.com').trim();
   const isLocalhost = backendUrl.includes('localhost') || backendUrl.includes('127.0.0.1');
 
   res.status(200).json({
@@ -46,7 +46,7 @@ router.get('/test', (req, res) => {
 // GET /api/webhooks/status -> Webhook health check (Step 13)
 router.get('/status', authenticateToken, async (req, res) => {
   try {
-    const backendUrl = (process.env.BACKEND_URL || 'http://localhost:5000').trim().replace(/\/$/, '');
+    const backendUrl = (process.env.BACKEND_URL || 'https://task-reporter-ai.onrender.com').trim().replace(/\/$/, '');
     const webhookUrl = `${backendUrl}/api/webhooks/github`;
     const isLocalhost = webhookUrl.includes('localhost') || webhookUrl.includes('127.0.0.1');
 

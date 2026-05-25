@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Github, Zap, ShieldCheck, RefreshCw, BarChart2, Cpu, Mail, Lock } from 'lucide-react';
 import api from '../services/api';
+import { getBackendBaseUrl } from '../lib/api';
 import toast from 'react-hot-toast';
 
 const Login = ({ navigate }) => {
@@ -30,12 +31,11 @@ const Login = ({ navigate }) => {
     setLoading(true);
     toast.loading('Redirecting to GitHub...', { duration: 1500 });
     
-    const backendUrl = import.meta.env.VITE_API_URL 
-      ? import.meta.env.VITE_API_URL.replace('/api', '') 
-      : 'https://task-reporter-ai.onrender.com';
+    const backendUrl = getBackendBaseUrl();
     
     window.location.href = `${backendUrl}/auth/github`;
   };
+
 
   const handleEmailLogin = async (e) => {
     e.preventDefault();

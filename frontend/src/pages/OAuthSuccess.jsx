@@ -25,12 +25,17 @@ const OAuthSuccess = ({ navigate }) => {
           setStep('done');
           setTimeout(() => {
             console.log('[OAuthSuccess] Navigating to dashboard...');
-            navigate('/');
+            navigate('/dashboard');
           }, 800);
         }, 2000);
+      }).catch((err) => {
+        console.error('[OAuthSuccess] Session verification failed:', err);
+        localStorage.removeItem('token');
+        navigate('/login?error=auth_failed');
       });
     } else {
       console.error('[OAuthSuccess] No token found in URL query parameters.');
+      localStorage.removeItem('token');
       navigate('/login?error=no_token');
     }
   }, [navigate, verifySession]);

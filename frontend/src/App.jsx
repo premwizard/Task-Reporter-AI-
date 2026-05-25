@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import api from './services/api';
+import { getBackendBaseUrl } from './lib/api';
 import toast, { Toaster } from 'react-hot-toast';
 
 // STEP 6 & 21: Lazy load pages with graceful suspense fallbacks
@@ -22,9 +23,8 @@ const AIReports = React.lazy(() => import('./pages/AIReports'));
 const WebhookMonitor = React.lazy(() => import('./pages/WebhookMonitor'));
 const OAuthSuccess = React.lazy(() => import('./pages/OAuthSuccess'));
 
-const SOCKET_URL = import.meta.env.VITE_API_URL 
-  ? import.meta.env.VITE_API_URL.replace('/api', '') 
-  : 'https://task-reporter-ai.onrender.com';
+const SOCKET_URL = getBackendBaseUrl();
+
 
 // ── STEP 21: ERROR BOUNDARY IMPLEMENTATION ────────────────────────────
 class ErrorBoundary extends React.Component {
@@ -556,7 +556,7 @@ function MainAppContent() {
     if (dateFilter && dateFilter !== 'all') params.filter = dateFilter;
     
     const qs = new URLSearchParams(params).toString();
-    const backendBase = import.meta.env.VITE_API_URL || 'https://task-reporter-ai.onrender.com/api';
+    const backendBase = `${getBackendBaseUrl()}/api`;
     
     window.open(`${backendBase}/export/${type}?${qs}`, '_blank');
   };

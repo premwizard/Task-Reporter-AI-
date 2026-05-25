@@ -5,6 +5,7 @@ import {
   Terminal, Globe, BookOpen, Clock, Activity, CheckCircle, ExternalLink
 } from 'lucide-react';
 import api from '../services/api';
+import { getBackendBaseUrl } from '../lib/api';
 import toast from 'react-hot-toast';
 import { io } from 'socket.io-client';
 
@@ -30,7 +31,7 @@ const WebhookMonitor = () => {
       addLog(`📡 System: Backend public tunnel detected: "${response.tunnel_url}"`, response.is_localhost ? 'warn' : 'success');
     } catch (err) {
       console.error(err);
-      addLog(`❌ System Error: Failed to fetch backend tunnel info. Make sure the server is running on http://localhost:5000`, 'error');
+      addLog(`❌ System Error: Failed to fetch backend tunnel info. Make sure the server is running at ${getBackendBaseUrl()}`, 'error');
     } finally {
       setLoadingTunnel(false);
     }
@@ -62,9 +63,7 @@ const WebhookMonitor = () => {
     fetchConnectedRepos();
 
     // Hook up real-time websocket feed
-    const SOCKET_URL = import.meta.env.VITE_API_URL 
-      ? import.meta.env.VITE_API_URL.replace('/api', '') 
-      : 'https://task-reporter-ai.onrender.com';
+    const SOCKET_URL = getBackendBaseUrl();
     
     addLog(`🔌 WebSocket: Connecting to live feed at ${SOCKET_URL}...`, 'info');
     const socket = io(SOCKET_URL);

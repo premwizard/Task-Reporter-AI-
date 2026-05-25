@@ -52,10 +52,38 @@ app.use(helmet({
     } : false
 }));
 
-// STEP 2 — FIX CORS FOR PRODUCTION (Allow only the frontend URL)
-const allowedOrigin = (process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app').trim().replace(/\/$/, '');
+// STEP 2 — FIX CORS FOR PRODUCTION (Allow dynamic frontend URLs securely)
+const isProduction = process.env.NODE_ENV === 'production';
+const allowedOrigins = isProduction
+    ? [ (process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app').trim().replace(/\/$/, '') ]
+    : [
+        'https://task-reporter-ai.vercel.app',
+        'http://localhost:3000',
+        'http://localhost:5173',
+        'http://127.0.0.1:3000',
+        'http://127.0.0.1:5173'
+    ];
+
+if (!isProduction && process.env.FRONTEND_URL) {
+    const envOrigin = process.env.FRONTEND_URL.trim().replace(/\/$/, '');
+    if (!allowedOrigins.includes(envOrigin)) {
+        allowedOrigins.push(envOrigin);
+    }
+}
+
 app.use(cors({
-    origin: allowedOrigin,
+    origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps, native curl)
+        if (!origin) return callback(null, true);
+        
+        const cleanOrigin = origin.trim().replace(/\/$/, '');
+        if (allowedOrigins.includes(cleanOrigin)) {
+            return callback(null, true);
+        }
+        
+        console.warn(`[CORS Blocked] Request from origin: ${origin} blocked.`);
+        return callback(new Error('Not allowed by CORS'), false);
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
@@ -184,9 +212,10 @@ const startServer = async () => {
         await initDatabase();
         
         httpServer.listen(PORT, () => {
-            console.log('====================================');
             console.log(`🚀 GitIntel Backend Running on port ${PORT}`);
-            console.log(`📡 FRONTEND_URL is set to: ${allowedOrigin}`);
+            console.log("NODE_ENV:", process.env.NODE_ENV || 'development');
+            console.log("FRONTEND_URL:", process.env.FRONTEND_URL || 'https://task-reporter-ai.vercel.app');
+            console.log("BACKEND_URL:", process.env.BACKEND_URL || 'https://task-reporter-ai.onrender.com');
             console.log('====================================');
             initCronJobs();
         });

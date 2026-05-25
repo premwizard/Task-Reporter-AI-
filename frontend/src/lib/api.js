@@ -1,6 +1,21 @@
 import axios from 'axios';
 
-const API_BASE_URL = (import.meta.env.VITE_API_URL || 'https://task-reporter-ai.onrender.com').replace(/\/$/, '') + '/api';
+export const getBackendBaseUrl = () => {
+  const envUrl = import.meta.env.VITE_API_URL;
+  if (envUrl && envUrl.startsWith('http')) {
+    return envUrl.replace(/\/api$/, '').replace(/\/$/, '');
+  }
+  
+  const isProduction = import.meta.env.PROD || (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1');
+  if (isProduction) {
+    return 'https://task-reporter-ai.onrender.com';
+  }
+  
+  return 'http://localhost:5000';
+};
+
+const API_BASE_URL = `${getBackendBaseUrl()}/api`;
+
 
 const api = axios.create({
   baseURL: API_BASE_URL,
